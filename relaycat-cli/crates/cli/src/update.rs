@@ -281,6 +281,20 @@ fn validate_cli_manifest(manifest: &CliUpdateManifest) -> Result<()> {
     if manifest.platform != "cli" {
         bail!("manifest platform must be cli");
     }
+    for download in &manifest.downloads {
+        validate_update_url(&download.url)?;
+    }
+    Ok(())
+}
+
+fn validate_update_url(url: &str) -> Result<()> {
+    let url = url.trim();
+    if url.starts_with('-') {
+        bail!("update URL must not start with '-'");
+    }
+    if !url.starts_with("https://") {
+        bail!("update URL must use https://: {url}");
+    }
     Ok(())
 }
 
@@ -305,9 +319,8 @@ fn fetch_url_to_string(url: &str) -> Result<String> {
 }
 
 fn fetch_url_to_string_with_timeout(url: &str, max_time_secs: u64) -> Result<String> {
-    let output = curl_command(url, max_time_secs)
-        .arg("--output")
-        .arg("-")
+    validate_update_url(url)?;
+    let output = curl_command(url, max_time_secs, Some(Path::new("-")))
         .output()
         .with_context(|| format!("failed to run curl for {url}"))?;
     if !output.status.success() {
@@ -320,9 +333,8 @@ fn fetch_url_to_string_with_timeout(url: &str, max_time_secs: u64) -> Result<Str
 }
 
 fn download_url_to_path(url: &str, output: &Path) -> Result<()> {
-    let status = curl_command(url, 300)
-        .arg("--output")
-        .arg(output)
+    validate_update_url(url)?;
+    let status = curl_command(url, 300, Some(output))
         .status()
         .with_context(|| format!("failed to run curl for {url}"))?;
     if !status.success() {
@@ -331,16 +343,21 @@ fn download_url_to_path(url: &str, output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn curl_command(url: &str, max_time_secs: u64) -> Command {
+fn curl_command(url: &str, max_time_secs: u64, output: Option<&Path>) -> Command {
     let mut command = Command::new("curl");
     command
+        .arg("--proto")
+        .arg("=https")
         .arg("--fail")
         .arg("--location")
         .arg("--silent")
         .arg("--show-error")
         .arg("--max-time")
-        .arg(max_time_secs.to_string())
-        .arg(url);
+        .arg(max_time_secs.to_string());
+    if let Some(output) = output {
+        command.arg("--output").arg(output);
+    }
+    command.arg("--").arg(url);
     command
 }
 
@@ -525,6 +542,23 @@ mod tests {
         let err = verify_download_size(&path, Some(4)).expect_err("size mismatch");
         assert!(err.to_string().contains("download size mismatch"));
         assert!(verify_download_size(&path, None).is_ok());
+    }
+
+    #[test]
+    fn validate_update_url_requires_https_and_rejects_options() {
+        assert!(validate_update_url("https://www.relaycat.cn/update/cli.json").is_ok());
+        assert!(validate_update_url("http://www.relaycat.cn/update/cli.json").is_err());
+        assert!(validate_update_url("file:///etc/passwd").is_err());
+        assert!(validate_update_url("-K/tmp/config").is_err());
+    }
+
+    #[test]
+    fn curl_command_places_end_of_options_before_url() {
+        let cmd = curl_command("https://example.com/cli.json", 10, Some(Path::new("-")));
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let dash_pos = args.iter().position(|a| a == "--").expect("has --");
+        assert_eq!(args.get(dash_pos + 1).map(String::as_str), Some("https://example.com/cli.json"));
+        assert!(args.windows(2).any(|w| w == ["--output", "-"]));
     }
 
     fn tempfile_dir(prefix: &str) -> PathBuf {
