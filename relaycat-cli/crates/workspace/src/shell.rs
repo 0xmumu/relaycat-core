@@ -42,6 +42,7 @@ struct Shell {
     writer: Mutex<Box<dyn Write + Send>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
+    child_pid: Option<u32>,
 }
 
 impl ShellManager {
@@ -111,6 +112,7 @@ impl ShellManager {
         command.cwd(cwd.as_ref());
         configure_shell_terminal_env(&mut command);
         let child = pair.slave.spawn_command(command).map_err(internal_error)?;
+        let child_pid = child.process_id();
         drop(pair.slave);
         let mut reader = pair.master.try_clone_reader().map_err(internal_error)?;
         let writer = pair.master.take_writer().map_err(internal_error)?;
@@ -133,6 +135,7 @@ impl ShellManager {
             writer: Mutex::new(writer),
             master: Mutex::new(pair.master),
             child: Mutex::new(child),
+            child_pid,
         });
         let background = Arc::clone(&shell);
         thread::Builder::new()
@@ -299,6 +302,7 @@ impl ShellManager {
             .map_err(|_| WorkspaceServiceError::busy())?
             .remove(id)
             .ok_or_else(shell_not_found)?;
+        kill_child_process_group(shell.child_pid);
         let _ = shell
             .child
             .lock()
@@ -477,6 +481,25 @@ fn windows_shell_cwd(path: &Path) -> Cow<'_, Path> {
 fn shell_not_found() -> WorkspaceServiceError {
     WorkspaceServiceError::new(WorkspaceErrorCode::NotFound, "shell was not found", false)
 }
+
+#[cfg(unix)]
+fn kill_child_process_group(child_pid: Option<u32>) {
+    let Some(pid) = child_pid.and_then(|pid| i32::try_from(pid).ok()) else {
+        return;
+    };
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    const SIGKILL: i32 = 9;
+    // SAFETY: `portable-pty` spawns the shell as its own session leader
+    // (`setsid`), so `-pid` targets the shell's process group.
+    unsafe {
+        let _ = kill(-pid, SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_child_process_group(_child_pid: Option<u32>) {}
 
 fn internal_error(error: impl ToString) -> WorkspaceServiceError {
     WorkspaceServiceError::new(WorkspaceErrorCode::Internal, error.to_string(), true)
