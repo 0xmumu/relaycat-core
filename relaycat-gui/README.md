@@ -1,6 +1,6 @@
 # RelayCat GUI
 
-RelayCat GUI 是 RelayCat 的开源桌面客户端，当前对外发布版本为 **0.1.7**。它使用 Tauri 2、Vite、TypeScript 和 xterm.js，将本地 AI Coding Agent、项目文件、Git 工作流和手机远程控制整合在一个桌面界面中。
+RelayCat GUI 是 RelayCat 的开源桌面客户端，当前对外发布版本为 **0.1.9**。它使用 Tauri 2、Vite、TypeScript 和 xterm.js，将本地 AI Coding Agent、项目文件、Git 工作流和手机远程控制整合在一个桌面界面中。
 
 GUI 不会把项目上传到云端执行。Claude Code、Codex、OpenCode、Gemini CLI、Shell 和自定义工具仍在本机 PTY 中运行；手机通过 RelayCat 的端到端加密会话查看和控制终端。
 

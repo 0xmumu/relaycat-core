@@ -72,7 +72,7 @@ GUI 适合首次使用、同时管理多个项目，或希望通过可视化界�
 5. 启动 Relay 会话后，用手机 App 扫描弹出的二维码。
 6. 状态变为“已配对”后，即可在手机和电脑上共同操作该终端。
 
-GUI 0.1.7 提供多标签与分屏 PTY、工具检测、项目收藏、二维码展示、连接状态和最近会话入口；还内置项目文件浏览、开发文件预览、Git 状态与 Diff、暂存与提交、分支与历史、远程操作、共享终端、自动更新、托盘和诊断包。它复用 CLI 的会话、工作区与加密逻辑，不单独实现另一套协议。Windows 未安装 Git 时，GUI 和 App 都会收到明确的 Git 未安装提示。
+GUI 0.1.9 提供多标签与分屏 PTY、工具检测、项目收藏、二维码展示、连接状态和最近会话入口；还内置项目文件浏览、开发文件预览、Git 状态与 Diff、暂存与提交、分支与历史、远程操作、共享终端、自动更新、托盘和诊断包。它复用 CLI 的会话、工作区与加密逻辑，不单独实现另一套协议。Windows 未安装 Git 时，GUI 和 App 都会收到明确的 Git 未安装提示。
 
 ### 方式二：使用 CLI
 
@@ -363,6 +363,7 @@ relaycat-relay-v<version>
 
 ## 相关文档
 
+- 更新日志：[CHANGELOG.md](CHANGELOG.md)
 - CLI：[relaycat-cli/README.md](relaycat-cli/README.md)
 - GUI：[relaycat-gui/README.md](relaycat-gui/README.md)
 - Relay server：[relaycat-server/README.md](relaycat-server/README.md)
