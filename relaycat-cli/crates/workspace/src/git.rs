@@ -118,9 +118,30 @@ impl GitService {
         let offset = cursor.as_deref().unwrap_or("0").parse::<usize>().map_err(|_| WorkspaceServiceError::invalid("invalid history cursor"))?;
         let page = usize::from(limit.clamp(1, WORKSPACE_GIT_HISTORY_PAGE_SIZE));
         let mut args = vec!["log".to_string(), format!("--skip={offset}"), format!("-n{}", page + 1), "--date=unix".into(), "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%at%x1f%D%x1f%P%x1e".into()];
+        let query = query.trim();
+        let author = author.trim();
+        let reference = reference.trim();
         if !query.is_empty() { args.push(format!("--grep={query}")); }
         if !author.is_empty() { args.push(format!("--author={author}")); }
-        if !reference.is_empty() { if reference.starts_with('-') { return Err(WorkspaceServiceError::invalid("invalid history reference")); } args.push(reference.into()); }
+        if !reference.is_empty() {
+            if reference.starts_with('-') {
+                return Err(WorkspaceServiceError::invalid("invalid history reference"));
+            }
+            let commit = format!("{reference}^{{commit}}");
+            let verify = self.output(&[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                &commit,
+            ])?;
+            if !verify.status.success() {
+                return Err(WorkspaceServiceError::invalid("invalid history reference"));
+            }
+            args.push("--end-of-options".into());
+            args.push(reference.into());
+        }
+        args.extend(["--".into(), ".".into()]);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let text = self.text(&refs)?;
         let mut items: Vec<GitHistoryItem> = text.split('\x1e').filter_map(parse_history_item).collect();

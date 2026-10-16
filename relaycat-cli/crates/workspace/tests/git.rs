@@ -96,3 +96,12 @@ fn subdirectory_project_status_is_scoped_and_project_relative() {
         .current_dir(&repo.root).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&staged.stdout).trim(), "project/inside.txt");
 }
+
+#[test]
+fn history_rejects_option_like_or_invalid_references() {
+    let repo = Repo::new();
+    let git = GitService::new(ProjectRoot::open(&repo.root).unwrap());
+    assert!(git.history("", "", " --output=/tmp/evil", None, 10).is_err());
+    assert!(git.history("", "", "not-a-valid-ref", None, 10).is_err());
+    assert!(git.history("", "", "HEAD", None, 10).is_ok());
+}
