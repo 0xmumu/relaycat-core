@@ -36,6 +36,27 @@ fn saves_and_loads_kind_scoped_pairing_session() {
 }
 
 #[test]
+fn pairing_session_round_trips_relay_urls_containing_field_names_and_quotes() {
+    let temp = tempfile_dir("relaycat-pairing-store-escaped");
+    let path = session_file_path(&temp, &SessionKind::codex());
+    let material = PairingMaterial {
+        relay_url: "wss://relay.example.com/ws?meta=\"room\":\"fake\"".to_string(),
+        room_id: "real-room-id".to_string(),
+        cli_public_key: [1; 32],
+        pairing_token: vec![2; 16],
+        session_kind: SessionKind::codex(),
+    };
+    let session = StoredPairingSession::new(material.clone(), [3; 32]);
+
+    save_session(&path, &session).expect("save session");
+    let loaded = load_session(&path)
+        .expect("load session")
+        .expect("stored session");
+
+    assert_eq!(loaded.material(), material);
+}
+
+#[test]
 fn pairing_session_expires_after_twenty_four_hours() {
     let material = PairingMaterial {
         relay_url: "ws://127.0.0.1:8787".to_string(),

@@ -8,6 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use relaycat_crypto::KeyPair;
+use serde::{Deserialize, Serialize};
 
 use crate::{command::SessionKind, pairing::PairingMaterial};
 
@@ -59,30 +60,34 @@ impl StoredPairingSession {
         }
     }
 
-    fn encode(&self) -> String {
-        format!(
-            concat!(
-                "{{\n",
-                "  \"version\": {},\n",
-                "  \"created_at_unix\": {},\n",
-                "  \"relay\": \"{}\",\n",
-                "  \"room\": \"{}\",\n",
-                "  \"kind\": \"{}\",\n",
-                "  \"cli_private_key\": \"{}\",\n",
-                "  \"cli_public_key\": \"{}\",\n",
-                "  \"token\": \"{}\"\n",
-                "}}\n"
-            ),
-            self.version,
-            self.created_at_unix,
-            escape_json_string(&self.relay_url),
-            escape_json_string(&self.room_id),
-            self.session_kind.as_str(),
-            URL_SAFE_NO_PAD.encode(self.cli_private_key),
-            URL_SAFE_NO_PAD.encode(self.cli_public_key),
-            URL_SAFE_NO_PAD.encode(&self.pairing_token)
-        )
+    fn encode(&self) -> Result<String> {
+        let file = StoredPairingSessionFile {
+            version: Some(self.version),
+            created_at_unix: Some(self.created_at_unix),
+            relay: Some(self.relay_url.clone()),
+            room: Some(self.room_id.clone()),
+            kind: Some(self.session_kind.as_str().to_string()),
+            cli_private_key: Some(URL_SAFE_NO_PAD.encode(self.cli_private_key)),
+            cli_public_key: Some(URL_SAFE_NO_PAD.encode(self.cli_public_key)),
+            token: Some(URL_SAFE_NO_PAD.encode(&self.pairing_token)),
+        };
+        let mut encoded =
+            serde_json::to_string_pretty(&file).context("failed to encode pairing session")?;
+        encoded.push('\n');
+        Ok(encoded)
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredPairingSessionFile {
+    version: Option<u8>,
+    created_at_unix: Option<u64>,
+    relay: Option<String>,
+    room: Option<String>,
+    kind: Option<String>,
+    cli_private_key: Option<String>,
+    cli_public_key: Option<String>,
+    token: Option<String>,
 }
 
 pub fn project_dir(target_cwd: Option<&Path>) -> Result<PathBuf> {
@@ -222,7 +227,8 @@ pub fn save_session(path: &Path, session: &StoredPairingSession) -> Result<()> {
     let mut file = options
         .open(path)
         .with_context(|| format!("failed to write pairing session {}", path.display()))?;
-    file.write_all(session.encode().as_bytes())
+    let encoded = session.encode()?;
+    file.write_all(encoded.as_bytes())
         .with_context(|| format!("failed to write pairing session {}", path.display()))?;
     #[cfg(unix)]
     {
@@ -254,27 +260,29 @@ pub fn ensure_gitignore(project_dir: &Path) -> Result<()> {
 }
 
 fn parse_session(text: &str) -> Result<Option<StoredPairingSession>> {
-    let Some(version) = json_number(text, "version") else {
+    let file: StoredPairingSessionFile =
+        serde_json::from_str(text).context("invalid pairing session JSON")?;
+    let Some(version) = file.version else {
         return Ok(None);
     };
     if version != 1 {
         bail!("unsupported pairing session version {version}");
     }
-    let Some(created_at_unix) = json_u64(text, "created_at_unix") else {
+    let Some(created_at_unix) = file.created_at_unix else {
         return Ok(None);
     };
-    let relay_url = required_json_string(text, "relay")?;
-    let room_id = required_json_string(text, "room")?;
-    let session_kind = decode_session_kind(&required_json_string(text, "kind")?)?;
+    let relay_url = file.relay.context("missing relay")?;
+    let room_id = file.room.context("missing room")?;
+    let session_kind = decode_session_kind(&file.kind.context("missing kind")?)?;
     let cli_private_key = decode_key(
         "cli_private_key",
-        &required_json_string(text, "cli_private_key")?,
+        &file.cli_private_key.context("missing cli_private_key")?,
     )?;
     let cli_public_key = decode_key(
         "cli_public_key",
-        &required_json_string(text, "cli_public_key")?,
+        &file.cli_public_key.context("missing cli_public_key")?,
     )?;
-    let pairing_token = decode_token(&required_json_string(text, "token")?)?;
+    let pairing_token = decode_token(&file.token.context("missing token")?)?;
 
     Ok(Some(StoredPairingSession {
         version: 1,
@@ -286,69 +294,6 @@ fn parse_session(text: &str) -> Result<Option<StoredPairingSession>> {
         cli_public_key,
         pairing_token,
     }))
-}
-
-fn json_number(text: &str, key: &str) -> Option<u8> {
-    json_u64(text, key)?.try_into().ok()
-}
-
-fn json_u64(text: &str, key: &str) -> Option<u64> {
-    let needle = format!("\"{key}\"");
-    let (_, rest) = text.split_once(&needle)?;
-    let (_, rest) = rest.split_once(':')?;
-    let digits: String = rest
-        .trim_start()
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-    digits.parse().ok()
-}
-
-fn required_json_string(text: &str, key: &str) -> Result<String> {
-    json_string(text, key).with_context(|| format!("missing {key}"))
-}
-
-fn json_string(text: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{key}\"");
-    let (_, rest) = text.split_once(&needle)?;
-    let (_, rest) = rest.split_once(':')?;
-    let rest = rest.trim_start();
-    let rest = rest.strip_prefix('"')?;
-    let mut value = String::new();
-    let mut chars = rest.chars();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' => return Some(value),
-            '\\' => match chars.next()? {
-                '"' => value.push('"'),
-                '\\' => value.push('\\'),
-                '/' => value.push('/'),
-                'n' => value.push('\n'),
-                'r' => value.push('\r'),
-                't' => value.push('\t'),
-                'b' => value.push('\x08'),
-                'f' => value.push('\x0C'),
-                'u' => {
-                    let hex: String = chars.by_ref().take(4).collect();
-                    if hex.len() == 4
-                        && let Ok(n) = u32::from_str_radix(&hex, 16)
-                        && let Some(c) = char::from_u32(n)
-                    {
-                        value.push(c);
-                        continue;
-                    }
-                    return None;
-                }
-                other => value.push(other),
-            },
-            _ => value.push(ch),
-        }
-    }
-    None
-}
-
-fn escape_json_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn decode_key(field: &str, value: &str) -> Result<[u8; 32]> {
