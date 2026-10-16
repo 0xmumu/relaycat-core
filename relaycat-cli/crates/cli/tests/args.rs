@@ -55,9 +55,6 @@ fn top_level_help_shows_relay_usage_examples() {
     );
     assert!(help.contains("relaycat opencode --relay ws://127.0.0.1:8787"));
     assert!(help.contains("relaycat gemini --relay ws://127.0.0.1:8787"));
-    assert!(
-        help.contains("relaycat aider --project /path/to/project --relay wss://relay.example.com")
-    );
     assert!(!help.contains("--room"));
 }
 
@@ -235,23 +232,6 @@ fn builds_gemini_target_command() {
     assert_eq!(
         target.session_kind,
         relaycat_cli::command::SessionKind::gemini()
-    );
-    assert!(target.args.is_empty());
-    assert!(!target.session_kind.uses_managed_alt_screen());
-    assert_eq!(target.cwd, Some(current_dir));
-    assert_eq!(target.relay, None);
-}
-
-#[test]
-fn builds_aider_target_command() {
-    let cli = Cli::parse_from(["relaycat", "aider"]);
-    let target = TargetCommand::from_cli(&cli).expect("target command");
-    let current_dir = std::env::current_dir().expect("current dir");
-
-    assert_eq!(target.program, "aider");
-    assert_eq!(
-        target.session_kind,
-        relaycat_cli::command::SessionKind::aider()
     );
     assert!(target.args.is_empty());
     assert!(!target.session_kind.uses_managed_alt_screen());

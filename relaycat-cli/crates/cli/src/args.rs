@@ -14,7 +14,6 @@ Examples:
   relaycat claude --project /path/to/project --relay wss://relay.example.com
   relaycat opencode --relay ws://127.0.0.1:8787
   relaycat gemini --relay ws://127.0.0.1:8787
-  relaycat aider --project /path/to/project --relay wss://relay.example.com
   relaycat tool my-agent --cmd my-agent --relay wss://relay.example.com -- --model flash
   relaycat qr --project /path/to/project --kind codex
 
@@ -91,14 +90,6 @@ impl Cli {
                     "在 PTY 中启动 Gemini CLI。",
                 )
             })
-            .mut_subcommand("aider", |cmd| {
-                agent_command_help(
-                    cmd,
-                    language,
-                    "Start Aider in a PTY.",
-                    "在 PTY 中启动 Aider。",
-                )
-            })
             .mut_subcommand("tool", |cmd| {
                 common_command_help(cmd, language)
                     .about(language.t(
@@ -152,8 +143,8 @@ impl Cli {
                     })
                     .mut_arg("kind", |arg| {
                         arg.help(language.t(
-                            "Session kind to show, for example codex, claude, opencode, gemini, aider or shell.",
-                            "要显示的会话类型，例如 codex、claude、opencode、gemini、aider 或 shell。",
+                            "Session kind to show, for example codex, claude, opencode, gemini or shell.",
+                            "要显示的会话类型，例如 codex、claude、opencode、gemini 或 shell。",
                         ))
                     })
                     .mut_arg("png", |arg| {
@@ -312,7 +303,6 @@ Examples:
   relaycat claude --project /path/to/project --relay wss://relay.example.com
   relaycat opencode --relay ws://127.0.0.1:8787
   relaycat gemini --relay ws://127.0.0.1:8787
-  relaycat aider --project /path/to/project --relay wss://relay.example.com
   relaycat tool my-agent --cmd my-agent --relay wss://relay.example.com -- --model flash
   relaycat qr --project /path/to/project --kind codex
   relaycat update
@@ -328,7 +318,6 @@ Relay:
   relaycat claude --project /path/to/project --relay wss://relay.example.com
   relaycat opencode --relay ws://127.0.0.1:8787
   relaycat gemini --relay ws://127.0.0.1:8787
-  relaycat aider --project /path/to/project --relay wss://relay.example.com
   relaycat tool my-agent --cmd my-agent --relay wss://relay.example.com -- --model flash
   relaycat qr --project /path/to/project --kind codex
   relaycat update
@@ -352,8 +341,6 @@ pub enum Command {
     Opencode(AgentArgs),
     /// Start Gemini CLI in a PTY.
     Gemini(AgentArgs),
-    /// Start Aider in a PTY.
-    Aider(AgentArgs),
     /// Start any command as a named tool session in a PTY.
     Tool(ToolArgs),
     /// Launch the interactive TUI to pick and start a tool.

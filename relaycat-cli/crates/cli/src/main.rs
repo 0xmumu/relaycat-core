@@ -65,7 +65,6 @@ async fn main() -> Result<()> {
         | Command::Codex(_)
         | Command::Opencode(_)
         | Command::Gemini(_)
-        | Command::Aider(_)
         | Command::Tool(_) => {}
     }
     let target = TargetCommand::from_cli(&cli)?;

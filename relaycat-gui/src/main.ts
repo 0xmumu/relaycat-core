@@ -25,7 +25,12 @@ import { shouldApplyRelaySnapshot } from "./relay-state";
 import { projectRowMenuItems } from "./project-row-menu";
 import { restoreTerminalFocusAfterOverlayClose } from "./pairing-focus";
 import { runSplitAction } from "./split-action";
-import { appendedTextareaText, truncateUtf8 } from "./terminal-input";
+import {
+  appendedTextareaText,
+  attachTerminalImeHandler,
+  splitToolArgs,
+  truncateUtf8,
+} from "./terminal-input";
 import {
   createWorkspacePanel,
   type WorkspaceEntryMode,
@@ -424,15 +429,26 @@ function confirmDialog(opts: {
 /* ----------------------------- new session ------------------------------- */
 
 let projectRows: { path: string; favorite: boolean; note?: string }[] = [];
+let newSessionOpenRevision = 0;
+
+function showNoticeDialog(title: string, message: string): Promise<void> {
+  return confirmDialog({
+    title,
+    message,
+    okLabel: t("confirm_ok"),
+    hideCancel: true,
+  }).then(() => undefined);
+}
 
 function ensureTabCapacity(): boolean {
   if (canCreateTab(tabs.length)) return true;
-  alert(t("tab_limit_reached", MAX_TAB_COUNT));
+  void showNoticeDialog(t("new_session"), t("tab_limit_reached", MAX_TAB_COUNT));
   return false;
 }
 
 async function openNewSession() {
   if (!ensureTabCapacity()) return;
+  const openRevision = ++newSessionOpenRevision;
   config = await invoke<ConfigDto>("get_config");
   tools = await invoke<Tool[]>("list_tools");
   selectedTool = config.default_tool || tools[0]?.name || "shell";
@@ -440,7 +456,7 @@ async function openNewSession() {
   // Render chips immediately so the dialog opens without waiting, then disable
   // any tools the persisted detection cache marks as not installed.
   renderToolChips();
-  void refreshNewSessionToolStatus();
+  void refreshNewSessionToolStatus(openRevision);
 
   // Unlike the CLI, the GUI is an installed app whose working directory (e.g.
   // the install location) is meaningless as a project, so the list is built
@@ -514,8 +530,9 @@ function statusMap(statuses: ToolStatus[]): Record<string, boolean> {
 // Refresh install status for the new-session dialog and re-render the chips.
 // If the pre-selected tool turns out to be missing, fall back to the first
 // installed one so the launch button never targets a missing program.
-async function refreshNewSessionToolStatus() {
+async function refreshNewSessionToolStatus(openRevision = newSessionOpenRevision) {
   await refreshToolStatus();
+  if (openRevision !== newSessionOpenRevision) return;
   if (toolInstalled[selectedTool] === false) {
     const firstInstalled = tools.find((tl) => toolInstalled[tl.name] !== false);
     if (firstInstalled) selectedTool = firstInstalled.name;
@@ -777,194 +794,7 @@ async function createTab(tool: string, project: string, relay: string) {
     if (splitOn && tab.id === splitId) selectTab(tab.id);
   });
 
-  // xterm 6.0.0 still defers IME punctuation reported as keydown(229) to a
-  // zero-delay textarea read. Some desktop WebViews commit the punctuation
-  // after that timer, so the first key is held until the next keydown. Keep a
-  // baseline and flush the not-yet-sent textarea delta on keyup. This mirrors
-  // the upstream xterm fix for Chinese IME punctuation (not yet released).
-  let pending229Baseline: string | undefined;
-  let imeComposing = false;
-  let pending229FlushTimer: ReturnType<typeof setTimeout> | undefined;
-  let suppressNext229AfterComposition = false;
-  const modifierCodes = new Set([
-    "ShiftLeft",
-    "ShiftRight",
-    "ControlLeft",
-    "ControlRight",
-    "AltLeft",
-    "AltRight",
-    "MetaLeft",
-    "MetaRight",
-  ]);
-  const modifierKeysDown = new Set<string>();
-  type EarlyImeInput = {
-    data: string;
-    consumed: boolean;
-    awaitingKeydown: boolean;
-  };
-  const earlyImeInputs: EarlyImeInput[] = [];
-  let lastOnData:
-    | { data: string; textareaLength: number; at: number }
-    | undefined;
-  const trackModifier = (ev: KeyboardEvent, pressed: boolean) => {
-    const keyId = ev.code || ev.key;
-    if (!modifierCodes.has(keyId)) return;
-    if (pressed) modifierKeysDown.add(keyId);
-    else modifierKeysDown.delete(keyId);
-  };
-  term.textarea?.addEventListener("keydown", (ev) => trackModifier(ev, true), true);
-  term.textarea?.addEventListener("keyup", (ev) => trackModifier(ev, false), true);
-  const flushPending229 = () => {
-    if (pending229Baseline === undefined || imeComposing) return;
-    const value = term.textarea?.value ?? "";
-    const data = appendedTextareaText(pending229Baseline, value);
-    if (!data) return;
-    pending229Baseline = undefined;
-    term.input(data, true);
-  };
-  const schedulePending229Flush = () => {
-    if (pending229FlushTimer !== undefined) return;
-    // Let the WebView commit the keydown's text into the helper textarea
-    // before reading the append-only delta.
-    pending229FlushTimer = setTimeout(() => {
-      pending229FlushTimer = undefined;
-      flushPending229();
-    }, 0);
-  };
-  const queueEarlyImeInput = (data: string) => {
-    const textareaLength = term.textarea?.value.length ?? -1;
-    const now = performance.now();
-    // Depending on WebKit's listener ordering, xterm may fire onData during
-    // the input event before this listener runs. Match both the character and
-    // the committed textarea length so a prior keypress cannot consume the
-    // current candidate, even when the same character is typed repeatedly.
-    const alreadySent =
-      lastOnData !== undefined &&
-      lastOnData.data === data &&
-      lastOnData.textareaLength === textareaLength &&
-      now - lastOnData.at <= 50;
-    const candidate: EarlyImeInput = {
-      data,
-      consumed: alreadySent,
-      awaitingKeydown: true,
-    };
-    earlyImeInputs.push(candidate);
-    window.setTimeout(() => {
-      if (!candidate.consumed) {
-        candidate.consumed = true;
-        term.input(data, true);
-      }
-    }, 16);
-    window.setTimeout(() => {
-      const index = earlyImeInputs.indexOf(candidate);
-      if (index >= 0) earlyImeInputs.splice(index, 1);
-    }, 500);
-  };
-  term.attachCustomKeyEventHandler((ev) => {
-    if (ev.type === "keydown" && ev.keyCode === 229) {
-      if (imeComposing || ev.isComposing) {
-        // Real IME composition is fully owned by xterm's CompositionHelper.
-        // A 229 baseline here would later replay part of the committed text.
-        pending229Baseline = undefined;
-      } else if (suppressNext229AfterComposition) {
-        // WebKit emits the Enter/Space confirmation key after compositionend.
-        // Its text has already been (or is about to be) emitted by xterm.
-        suppressNext229AfterComposition = false;
-        pending229Baseline = undefined;
-      } else {
-        const earlyInput = earlyImeInputs.find((candidate) => candidate.awaitingKeydown);
-        if (earlyInput) {
-          // WebKit delivered input before this printable keydown. Whether xterm
-          // or our delayed fallback sent it, do not create a stale 229 baseline.
-          earlyInput.awaitingKeydown = false;
-        } else if (pending229Baseline === undefined) {
-          pending229Baseline = term.textarea?.value ?? "";
-          // Queue the fallback after the current event so the WebView gets a
-          // chance to commit the punctuation into the helper textarea.
-          queueMicrotask(schedulePending229Flush);
-        }
-      }
-      // This workaround owns non-composition keydown(229). Do not let xterm's
-      // CompositionHelper schedule a second delayed textarea diff, which can
-      // observe blur/paste clearing the textarea and emit an unwanted DEL.
-      return false;
-    }
-    if (ev.type === "keyup") {
-      schedulePending229Flush();
-    }
-    return true;
-  });
-  // On blur xterm resets the hidden textarea, and modifier keyups / pending
-  // IME state may never be delivered while focus is elsewhere. Drop all
-  // workaround state so a stale baseline or stuck modifier can't replay
-  // deletions or duplicate characters after focus returns.
-  term.textarea?.addEventListener("blur", () => {
-    pending229Baseline = undefined;
-    imeComposing = false;
-    suppressNext229AfterComposition = false;
-    if (pending229FlushTimer !== undefined) {
-      clearTimeout(pending229FlushTimer);
-      pending229FlushTimer = undefined;
-    }
-    for (const candidate of earlyImeInputs) candidate.consumed = true;
-    earlyImeInputs.length = 0;
-    modifierKeysDown.clear();
-    lastOnData = undefined;
-  });
-  term.textarea?.addEventListener("compositionstart", () => {
-    imeComposing = true;
-    pending229Baseline = undefined;
-    suppressNext229AfterComposition = false;
-    if (pending229FlushTimer !== undefined) {
-      clearTimeout(pending229FlushTimer);
-      pending229FlushTimer = undefined;
-    }
-  });
-  term.textarea?.addEventListener("compositionend", () => {
-    imeComposing = false;
-    pending229Baseline = undefined;
-    suppressNext229AfterComposition = true;
-    if (pending229FlushTimer !== undefined) {
-      clearTimeout(pending229FlushTimer);
-      pending229FlushTimer = undefined;
-    }
-    window.setTimeout(() => {
-      suppressNext229AfterComposition = false;
-    }, 100);
-  });
-  term.textarea?.addEventListener("input", (ev) => {
-    const input = ev as InputEvent;
-    if (
-      !imeComposing &&
-      input.inputType === "insertText" &&
-      input.data &&
-      !input.defaultPrevented &&
-      modifierKeysDown.size > 0 &&
-      pending229Baseline === undefined
-    ) {
-      queueEarlyImeInput(input.data);
-    } else if (pending229Baseline !== undefined && !imeComposing) {
-      schedulePending229Flush();
-    }
-  });
-
-  term.onData((data) => {
-    lastOnData = {
-      data,
-      textareaLength: term.textarea?.value.length ?? -1,
-      at: performance.now(),
-    };
-    const earlyInput = earlyImeInputs.find(
-      (candidate) => !candidate.consumed && candidate.data === data,
-    );
-    if (earlyInput) {
-      earlyInput.consumed = true;
-    }
-    if (pending229Baseline !== undefined && !imeComposing) {
-      const value = term.textarea?.value ?? "";
-      if (data === appendedTextareaText(pending229Baseline, value))
-        pending229Baseline = undefined;
-    }
+  attachTerminalImeHandler(term, (data) => {
     if (!tab.id.startsWith("failed-"))
       enqueueSessionInput(tab, data);
   });
@@ -1058,10 +888,10 @@ async function createTab(tool: string, project: string, relay: string) {
   if (relay) openPairingOverlay(tab);
 }
 
-function reopenTab(tab: Tab) {
+async function reopenTab(tab: Tab) {
   const { tool, project, relay } = tab;
-  void closeTab(tab.id, true);
-  void createTab(tool, project, relay);
+  await closeTab(tab.id, true);
+  await createTab(tool, project, relay);
 }
 
 function buildTabEl(tab: Tab) {
@@ -2098,7 +1928,13 @@ async function refreshDevices() {
     const btn = el("button", "btn danger sm") as HTMLButtonElement;
     btn.textContent = t("dev_revoke");
     btn.onclick = async () => {
-      if (!window.confirm(t("dev_revoke_confirm"))) return;
+      const ok = await confirmDialog({
+        title: t("dev_revoke"),
+        message: t("dev_revoke_confirm"),
+        okLabel: t("dev_revoke"),
+        danger: true,
+      });
+      if (!ok) return;
       btn.disabled = true;
       btn.textContent = t("dev_revoking");
       try {
@@ -2283,19 +2119,19 @@ async function addCustomTool() {
   const cmd = ($("#set-tool-cmd") as HTMLInputElement).value.trim();
   const argsRaw = ($("#set-tool-args") as HTMLInputElement).value.trim();
   if (!name || !cmd) {
-    alert(t("tool_need_name_cmd"));
+    await showNoticeDialog(t("settings"), t("tool_need_name_cmd"));
     return;
   }
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) {
-    alert(t("tool_bad_name"));
+    await showNoticeDialog(t("settings"), t("tool_bad_name"));
     return;
   }
   config = await invoke<ConfigDto>("get_config");
   if (config.tools.some((x) => x.name === name)) {
-    alert(t("tool_exists", name));
+    await showNoticeDialog(t("settings"), t("tool_exists", name));
     return;
   }
-  const args = argsRaw ? argsRaw.split(/\s+/) : [];
+  const args = splitToolArgs(argsRaw);
   config.tools.push({ name, cmd, args });
   await invoke("save_config", { config }).catch((e) => console.error(e));
   await openSettings();

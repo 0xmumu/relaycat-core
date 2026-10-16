@@ -1139,10 +1139,20 @@ fn build_diagnostics_report(
     Ok(redact(&s))
 }
 
-/// Write text to a user-chosen path (destination picked via the save dialog).
+/// Write a diagnostics report to a user-chosen `.txt` file path (destination
+/// picked via the save dialog).
 #[tauri::command]
 fn write_text_file(path: String, contents: String) -> Result<(), String> {
-    std::fs::write(&path, contents).map_err(|e| e.to_string())
+    let candidate = Path::new(&path);
+    if candidate.file_name().is_none()
+        || candidate
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_none_or(|ext| !ext.eq_ignore_ascii_case("txt"))
+    {
+        return Err("invalid diagnostics report path".into());
+    }
+    std::fs::write(candidate, contents).map_err(|e| e.to_string())
 }
 
 /// Append GUI panics to the crash log so they surface in diagnostics exports.
@@ -1274,7 +1284,10 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "tray-show" => show_main_window(app),
-            "tray-quit" => app.exit(0),
+            "tray-quit" => {
+                app.state::<SessionManager>().close_all();
+                app.exit(0);
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -1361,10 +1374,15 @@ fn hydrate_env_from_login_shell() {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
 
     // `-i -l -c` loads interactive + login startup files so we see the same
-    // PATH/vars the user gets in their terminal. Emit env null-separated so
-    // values containing newlines survive.
+    // PATH/vars the user gets in their terminal. Emit env null-separated after
+    // a sentinel marker so interactive shell banners never pollute the first
+    // variable, and values containing newlines survive.
+    const ENV_SENTINEL: &str = "__RELAYCAT_ENV_START__";
     let mut child = match Command::new(&shell)
-        .args(["-ilc", "/usr/bin/env -0 2>/dev/null || env -0"])
+        .args([
+            "-ilc",
+            "printf '__RELAYCAT_ENV_START__'; /usr/bin/env -0 2>/dev/null || env -0",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -1398,11 +1416,15 @@ fn hydrate_env_from_login_shell() {
         return;
     }
     let raw = String::from_utf8_lossy(&output.stdout);
-    for entry in raw.split('\0') {
+    let env_section = raw
+        .split_once(ENV_SENTINEL)
+        .map(|(_, after)| after)
+        .unwrap_or(&raw);
+    for entry in env_section.split('\0') {
         let Some((key, value)) = entry.split_once('=') else {
             continue;
         };
-        if key.is_empty() {
+        if !is_valid_env_var_name(key) {
             continue;
         }
         // Always adopt the login shell's PATH; for everything else only fill in
@@ -1418,6 +1440,15 @@ fn hydrate_env_from_login_shell() {
             unsafe { std::env::set_var(key, value) };
         }
     }
+}
+
+fn is_valid_env_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
 #[cfg(not(unix))]
@@ -1494,8 +1525,13 @@ pub fn run() {
             workspace::git_workspace_history,
             workspace::git_workspace_commit_diff,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running RelayCat GUI");
+        .build(tauri::generate_context!())
+        .expect("error while building RelayCat GUI")
+        .run(|app_handle, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                app_handle.state::<SessionManager>().close_all();
+            }
+        });
 }
 
 #[cfg(test)]

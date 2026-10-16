@@ -2,7 +2,7 @@
 //! run with no subcommand).
 //!
 //! Flow:
-//! 1. Pick a tool: the built-in shell/codex/claude/opencode/gemini/aider
+//! 1. Pick a tool: the built-in shell/codex/claude/opencode/gemini
 //!    entries plus any custom tools from `config.json`. The cursor starts on
 //!    the configured
 //!    default tool.
@@ -86,7 +86,6 @@ const BUILTIN_TOOLS: &[(&str, &str)] = &[
     ("Claude Code", "claude"),
     ("OpenCode", "opencode"),
     ("Gemini CLI", "gemini"),
-    ("Aider", "aider"),
 ];
 
 const UPDATE_NOTICE_POLL_INTERVAL: Duration = Duration::from_millis(250);

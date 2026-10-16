@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { appendedTextareaText, truncateUtf8 } from "../src/terminal-input.ts";
+import { appendedTextareaText, splitToolArgs, truncateUtf8 } from "../src/terminal-input.ts";
 
+const terminalInputSource = readFileSync(
+  new URL("../src/terminal-input.ts", import.meta.url),
+  "utf8",
+);
 const mainSource = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
+const embeddedShellSource = readFileSync(
+  new URL("../src/embedded-shell-panel.ts", import.meta.url),
+  "utf8",
+);
 
 test("IME fallback never turns a cleared helper textarea into terminal backspaces", () => {
   assert.equal(appendedTextareaText("未发送的输入", ""), "");
@@ -15,7 +23,7 @@ test("IME fallback ignores replacement text and only forwards an appended suffix
 });
 
 test("custom key handling consumes keydown 229 before xterm schedules a second textarea diff", () => {
-  const handler = mainSource.match(
+  const handler = terminalInputSource.match(
     /term\.attachCustomKeyEventHandler\(\(ev\) => \{([\s\S]*?)\n  \}\);\n  \/\/ On blur/,
   );
   assert.ok(handler, "custom key handler not found");
@@ -23,9 +31,19 @@ test("custom key handling consumes keydown 229 before xterm schedules a second t
     handler[1],
     /if \(ev\.type === "keydown" && ev\.keyCode === 229\) \{[\s\S]*?return false;\n    \}/,
   );
+  assert.match(mainSource, /attachTerminalImeHandler\(term,/);
+  assert.match(embeddedShellSource, /attachTerminalImeHandler\(shell\.term,/);
 });
 
 
 test("truncates pasted UTF-8 without splitting a character", () => {
   assert.equal(truncateUtf8("a😀b", 5), "a😀");
+});
+
+test("splitToolArgs preserves quoted segments and escaped spaces", () => {
+  assert.deepEqual(splitToolArgs(""), []);
+  assert.deepEqual(
+    splitToolArgs('--model flash --prompt "fix bug now" \'single quoted\' path\\ with\\ space'),
+    ["--model", "flash", "--prompt", "fix bug now", "single quoted", "path with space"],
+  );
 });

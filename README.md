@@ -2,7 +2,7 @@
 
 RelayCat Core 是本地 AI Coding Agent 的开源桌面控制层与加密中继层，包含 CLI、桌面 GUI、Relay 服务和共享协议。项目源码托管在 [GitHub](https://github.com/JackyZhang8/relaycat-core/)。
 
-它让你在手机上查看和控制电脑里的 Claude Code、Codex、OpenCode、Gemini CLI、Aider 或普通 Shell。代码、终端和 Agent 始终运行在自己的电脑上——**Local execution，Mobile control，End-to-end encryption**。
+它让你在手机上查看和控制电脑里的 Claude Code、Codex、OpenCode、Gemini CLI 或普通 Shell。代码、终端和 Agent 始终运行在自己的电脑上——**Local execution，Mobile control，End-to-end encryption**。
 
 > RelayCat 不是云 IDE，也不会把项目上传到 Relay 执行。电脑负责真正的任务，手机负责远程交互，Relay 只负责转发加密数据。
 
@@ -67,7 +67,7 @@ GUI 适合首次使用、同时管理多个项目，或希望通过可视化界�
 
 1. 安装并打开 RelayCat GUI。
 2. 选择项目目录。
-3. 选择 Claude Code、Codex、OpenCode、Gemini CLI、Aider、Shell 或自定义工具。
+3. 选择 Claude Code、Codex、OpenCode、Gemini CLI、Shell 或自定义工具。
 4. Relay 地址默认可使用官方服务 `wss://001.relaycat.cn`；留空时仅启动本地会话。
 5. 启动 Relay 会话后，用手机 App 扫描弹出的二维码。
 6. 状态变为“已配对”后，即可在手机和电脑上共同操作该终端。
@@ -103,7 +103,6 @@ relaycat claude \
 ```bash
 relaycat opencode --relay wss://001.relaycat.cn
 relaycat gemini --relay wss://001.relaycat.cn
-relaycat aider --project /path/to/project --relay wss://001.relaycat.cn
 relaycat shell --relay wss://001.relaycat.cn
 ```
 
@@ -267,7 +266,7 @@ Relay 正常情况下不能看到：
 
 ### 6. 第三方工具与用户责任
 
-RelayCat 保护的是桌面端和手机端之间的远程终端通道。Claude Code、Codex、OpenCode、Gemini CLI、Aider 或其他工具自身仍可能访问其服务商网络，并遵循各自的账号、模型、日志和隐私政策。
+RelayCat 保护的是桌面端和手机端之间的远程终端通道。Claude Code、Codex、OpenCode、Gemini CLI 或其他工具自身仍可能访问其服务商网络，并遵循各自的账号、模型、日志和隐私政策。
 
 手机远程操作拥有与本地终端相同的实际权限。对以下操作应保持额外谨慎：
 

@@ -3,7 +3,7 @@
 //!
 //! The config is optional: a missing file behaves exactly like
 //! [`Config::default`]. It lets the TUI launcher remember a default relay and
-//! tool, pin favorite projects, register custom tools (e.g. Gemini, Aider), and
+//! tool, pin favorite projects, register custom tools, and
 //! choose whether the launcher reappears after a session ends.
 
 use std::fs;
@@ -16,7 +16,7 @@ const CONFIG_FILE: &str = "config.json";
 const RELAYCAT_CONFIG_DIR: &str = "relaycat";
 
 /// A user-defined tool the launcher can start, in addition to the built-in
-/// shell/codex/claude/opencode/gemini/aider entries.
+/// shell/codex/claude/opencode/gemini entries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomTool {
     /// Stable id/kind shown in the app and recent list (e.g. `gemini`).

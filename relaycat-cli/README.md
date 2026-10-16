@@ -1,13 +1,13 @@
 # RelayCat CLI
 
-RelayCat CLI 是 RelayCat 的电脑端命令行入口，当前版本为 **0.1.3**，二进制名为 `relaycat`。它在本机启动 Claude Code、Codex、OpenCode、Gemini CLI、Aider、Shell 或自定义命令，管理 PTY 终端，并通过 Relay 将终端会话端到端加密地连接到 RelayCat App。
+RelayCat CLI 是 RelayCat 的电脑端命令行入口，当前版本为 **0.1.3**，二进制名为 `relaycat`。它在本机启动 Claude Code、Codex、OpenCode、Gemini CLI、Shell 或自定义命令，管理 PTY 终端，并通过 Relay 将终端会话端到端加密地连接到 RelayCat App。
 
 代码、凭据、项目目录和 Agent 进程始终留在本机；Relay 只转发握手信息和密文。
 
 ## 功能特性
 
 - CLI 与交互式 TUI 两种使用方式；不带子命令时直接进入 TUI。
-- 内置支持 Claude Code、Codex、OpenCode、Gemini CLI、Aider 和 Shell。
+- 内置支持 Claude Code、Codex、OpenCode、Gemini CLI 和 Shell。
 - 支持将任意本地命令注册为自定义工具。
 - 原生 PTY、终端窗口 resize、控制键和手机输入回传。
 - 扫码配对，以及基于 X25519、HKDF-SHA256 和 ChaCha20-Poly1305 的端到端加密。
@@ -45,7 +45,6 @@ relaycat codex \
 ```bash
 relaycat opencode --relay wss://001.relaycat.cn
 relaycat gemini --relay wss://001.relaycat.cn
-relaycat aider --project /path/to/project --relay wss://001.relaycat.cn
 relaycat shell --relay wss://001.relaycat.cn
 ```
 

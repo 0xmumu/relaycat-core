@@ -30,10 +30,6 @@ impl SessionKind {
         Self("gemini".to_string())
     }
 
-    pub fn aider() -> Self {
-        Self("aider".to_string())
-    }
-
     pub fn shell() -> Self {
         Self("shell".to_string())
     }
@@ -127,13 +123,6 @@ impl TargetCommand {
                 relay: relay_options(agent.relay.as_ref()),
                 session_kind: SessionKind::gemini(),
             }),
-            Command::Aider(agent) => Ok(Self {
-                program: "aider".to_string(),
-                args: Vec::new(),
-                cwd: Some(agent_cwd(agent.project.as_ref())?),
-                relay: relay_options(agent.relay.as_ref()),
-                session_kind: SessionKind::aider(),
-            }),
             Command::Tool(tool) => Ok(Self {
                 program: tool.cmd.clone(),
                 args: tool.args.clone(),
@@ -173,10 +162,9 @@ impl TargetCommand {
             ),
             "opencode" => ("opencode".to_string(), Vec::new(), SessionKind::opencode()),
             "gemini" => ("gemini".to_string(), Vec::new(), SessionKind::gemini()),
-            "aider" => ("aider".to_string(), Vec::new(), SessionKind::aider()),
             other => {
                 bail!(
-                    "unknown tool kind `{other}`; use shell, claude, codex, opencode, gemini or aider"
+                    "unknown tool kind `{other}`; use shell, claude, codex, opencode or gemini"
                 )
             }
         };

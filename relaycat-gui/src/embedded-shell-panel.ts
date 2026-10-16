@@ -11,6 +11,7 @@ import {
   shouldApplyWorkspaceOutput,
 } from "./embedded-shell-model";
 import { tabScrollState } from "./tab-scroll";
+import { attachTerminalImeHandler } from "./terminal-input";
 
 interface ActiveRelaySession {
   id: string;
@@ -368,7 +369,7 @@ export function createEmbeddedShellPanel(
     const id = session.id;
     const shell = createShellTab(session, normalized, id, "shared", 1);
     shell.remoteShellId = remoteShellId;
-    shell.term.onData((data) => {
+    attachTerminalImeHandler(shell.term, (data) => {
       if (shell.state === "running") {
         const generation = shell.inputGeneration;
         const bytes = Array.from(new TextEncoder().encode(data));
@@ -435,7 +436,7 @@ export function createEmbeddedShellPanel(
 
     const id = `workspace-local:${session.id}:${number}:${++localSequence}`;
     const shell = createShellTab(session, normalized, id, "local", number);
-    shell.term.onData((data) => {
+    attachTerminalImeHandler(shell.term, (data) => {
       if (shell.state === "running") {
         const generation = shell.inputGeneration;
         shell.inputQueue = shell.inputQueue.then(async () => {

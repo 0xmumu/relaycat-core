@@ -607,6 +607,17 @@ impl SessionManager {
         Ok(())
     }
 
+    pub fn close_all(&self) {
+        let sessions: Vec<LiveSession> = match self.sessions.lock() {
+            Ok(mut map) => map.drain().map(|(_, session)| session).collect(),
+            Err(_) => return,
+        };
+        for session in sessions {
+            session.alive.store(false, Ordering::Release);
+            let _ = session.control.kill();
+        }
+    }
+
     pub fn relay_state(&self, id: &str) -> Option<GuiRelayStateSnapshot> {
         let state = self.sessions.lock().ok()?.get(id)?.relay_state.clone()?;
         state.lock().ok()?.clone()
