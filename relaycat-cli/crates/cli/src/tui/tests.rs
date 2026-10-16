@@ -381,3 +381,24 @@ fn launcher_main_layout_hides_brand_panel_on_narrow_terminals() {
     assert!(layout.brand.is_none());
     assert_eq!(layout.content, area);
 }
+
+#[test]
+fn single_line_input_strips_paste_newlines_and_supports_ctrl_shortcuts() {
+    use crossterm::event::KeyModifiers;
+
+    let mut input = String::new();
+    append_pasted_single_line(&mut input, "ws://127.0.0.1:8787\r\n");
+    assert_eq!(input, "ws://127.0.0.1:8787");
+
+    // Control combinations must not insert literal letters.
+    apply_single_line_key_input(&mut input, KeyCode::Char('a'), KeyModifiers::CONTROL);
+    assert_eq!(input, "ws://127.0.0.1:8787");
+
+    // Ctrl+H acts like Backspace.
+    apply_single_line_key_input(&mut input, KeyCode::Char('h'), KeyModifiers::CONTROL);
+    assert_eq!(input, "ws://127.0.0.1:878");
+
+    // Ctrl+U clears the entire line.
+    apply_single_line_key_input(&mut input, KeyCode::Char('u'), KeyModifiers::CONTROL);
+    assert!(input.is_empty());
+}

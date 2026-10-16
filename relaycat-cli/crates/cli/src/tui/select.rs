@@ -89,8 +89,8 @@ pub(crate) fn select_launch(
         // Handle paste events for text input steps.
         if let Event::Paste(text) = &ev {
             match step {
-                Step::ProjectCustom => custom_input.push_str(text),
-                Step::Relay => relay_input.push_str(text),
+                Step::ProjectCustom => append_pasted_single_line(&mut custom_input, text),
+                Step::Relay => append_pasted_single_line(&mut relay_input, text),
                 _ => {}
             }
             continue;
@@ -201,11 +201,7 @@ pub(crate) fn select_launch(
                     project = chosen;
                     step = Step::Relay;
                 }
-                KeyCode::Backspace => {
-                    custom_input.pop();
-                }
-                KeyCode::Char(c) => custom_input.push(c),
-                _ => {}
+                _ => apply_single_line_key_input(&mut custom_input, key.code, key.modifiers),
             },
             Step::Relay => match key.code {
                 KeyCode::Esc => step = Step::Project,
@@ -219,13 +215,54 @@ pub(crate) fn select_launch(
                         relay,
                     }));
                 }
-                KeyCode::Backspace => {
-                    relay_input.pop();
-                }
-                KeyCode::Char(c) => relay_input.push(c),
-                _ => {}
+                _ => apply_single_line_key_input(&mut relay_input, key.code, key.modifiers),
             },
         }
+    }
+}
+
+pub(crate) fn append_pasted_single_line(buffer: &mut String, text: &str) {
+    buffer.extend(text.chars().filter(|ch| !ch.is_control()));
+}
+
+pub(crate) fn apply_single_line_key_input(
+    buffer: &mut String,
+    code: KeyCode,
+    modifiers: crossterm::event::KeyModifiers,
+) {
+    use crossterm::event::KeyModifiers;
+
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        match code {
+            KeyCode::Char('u' | 'U') => buffer.clear(),
+            KeyCode::Char('h' | 'H') => {
+                buffer.pop();
+            }
+            KeyCode::Char('w' | 'W') => {
+                while buffer.ends_with(char::is_whitespace) {
+                    buffer.pop();
+                }
+                while let Some(ch) = buffer.chars().last() {
+                    if ch.is_whitespace() {
+                        break;
+                    }
+                    buffer.pop();
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+    if modifiers.contains(KeyModifiers::ALT) || modifiers.contains(KeyModifiers::SUPER) {
+        return;
+    }
+
+    match code {
+        KeyCode::Backspace => {
+            buffer.pop();
+        }
+        KeyCode::Char(c) if !c.is_control() => buffer.push(c),
+        _ => {}
     }
 }
 
