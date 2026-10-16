@@ -204,7 +204,7 @@ fn builds_codex_target_command() {
         target.session_kind,
         relaycat_cli::command::SessionKind::codex()
     );
-    assert_eq!(target.args, ["--no-alt-screen"]);
+    assert_eq!(target.args, ["--no-alt-screen", "--no-daemon"]);
     assert_eq!(target.cwd, Some(current_dir));
     assert_eq!(target.relay, None);
 }

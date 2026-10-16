@@ -260,11 +260,21 @@ impl RecentFile {
                     .program
                     .or(record.cmd)
                     .unwrap_or_else(|| kind.as_str().to_string());
+                let mut args = record.args.unwrap_or_default();
+                if kind == SessionKind::codex()
+                    && program == "codex"
+                    && !args.iter().any(|arg| arg == "--no-daemon")
+                {
+                    if args.is_empty() {
+                        args.push("--no-alt-screen".to_string());
+                    }
+                    args.push("--no-daemon".to_string());
+                }
                 Some(RecentRecord {
                     id: record.id,
                     kind,
                     program,
-                    args: record.args.unwrap_or_default(),
+                    args,
                     project: record.project,
                     relay: record.relay,
                     last_used_at: record.last_used_at,

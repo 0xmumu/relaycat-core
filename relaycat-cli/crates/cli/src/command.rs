@@ -287,7 +287,7 @@ fn default_shell_command() -> (String, Vec<String>) {
 }
 
 fn codex_default_args() -> Vec<String> {
-    vec!["--no-alt-screen".to_string()]
+    vec!["--no-alt-screen".to_string(), "--no-daemon".to_string()]
 }
 
 fn agent_cwd(project: Option<&PathBuf>) -> Result<PathBuf> {
@@ -366,7 +366,7 @@ mod tests {
     fn builtin_codex_uses_inline_mode() {
         let target = TargetCommand::for_kind("codex", None, None).unwrap();
         assert_eq!(target.program, "codex");
-        assert_eq!(target.args, ["--no-alt-screen"]);
+        assert_eq!(target.args, ["--no-alt-screen", "--no-daemon"]);
         assert_eq!(target.session_kind, SessionKind::codex());
     }
 

@@ -224,6 +224,28 @@ fn save_and_load_round_trips_records_with_escaped_paths() {
 }
 
 #[test]
+fn load_upgrades_legacy_codex_records_with_no_daemon() {
+    let temp = tempfile_dir("relaycat-recent-codex-upgrade");
+    let path = temp.join("recent.json");
+    let store = RecentStore::new(vec![RecentRecord {
+        id: "codex-relaycat".to_string(),
+        kind: SessionKind::codex(),
+        program: "codex".to_string(),
+        args: vec!["--no-alt-screen".to_string()],
+        project: std::path::PathBuf::from("/tmp/relaycat"),
+        relay: "wss://relay.example.com".to_string(),
+        last_used_at: 1000,
+        use_count: 1,
+    }]);
+
+    store.save(&path).expect("save");
+    let loaded = RecentStore::load(&path).expect("load");
+    let target = loaded.resolve_target("1").expect("resolve target");
+
+    assert_eq!(target.args, ["--no-alt-screen", "--no-daemon"]);
+}
+
+#[test]
 fn formats_recent_list_in_chinese() {
     let store = RecentStore::new(vec![RecentRecord {
         id: "codex-relaycat".to_string(),
