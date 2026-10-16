@@ -16,7 +16,7 @@ use portable_pty::{Child, CommandBuilder, ExitStatus, MasterPty, PtySize, native
 use relaycat_workspace::configure_shell_terminal_env;
 
 use crate::command::TargetCommand;
-use crate::relay::kill_child_process_group;
+use crate::relay::{kill_child_process_group, resolve_pty_command_for_os};
 
 /// A spawned child process attached to a PTY, decoupled from any particular
 /// frontend. The caller owns rendering: clone [`PtySession::reader`] to read
@@ -50,10 +50,16 @@ impl PtySession {
             .openpty(pty_size(rows, cols))
             .context("failed to open PTY")?;
 
-        let mut command = CommandBuilder::new(&target.program);
-        command.args(&target.args);
+        let (spawn_program, spawn_args) =
+            resolve_pty_command_for_os(&target.program, &target.args);
+        let mut command = CommandBuilder::new(&spawn_program);
+        command.args(&spawn_args);
         if let Some(cwd) = &target.cwd {
             command.cwd(cwd);
+        }
+        #[cfg(windows)]
+        if let Ok(path) = std::env::var("PATH") {
+            command.env("PATH", &path);
         }
         for (key, value) in envs {
             command.env(key, value);

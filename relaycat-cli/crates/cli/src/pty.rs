@@ -6,12 +6,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use relaycat_workspace::configure_shell_terminal_env;
 
 use crate::{
     command::TargetCommand,
     relay::{
         LocalInterruptAction, current_terminal_size, join_pty_output_thread,
-        kill_child_process_group, local_interrupt_action_for_session,
+        kill_child_process_group, local_interrupt_action_for_session, resolve_pty_command_for_os,
     },
 };
 
@@ -27,11 +28,17 @@ pub fn run_interactive(target: TargetCommand) -> Result<()> {
     });
     let pair = pty_system.openpty(pty_size).context("failed to open PTY")?;
 
-    let mut command = CommandBuilder::new(&target.program);
-    command.args(&target.args);
+    let (spawn_program, spawn_args) = resolve_pty_command_for_os(&target.program, &target.args);
+    let mut command = CommandBuilder::new(&spawn_program);
+    command.args(&spawn_args);
     if let Some(cwd) = &target.cwd {
         command.cwd(cwd);
     }
+    #[cfg(windows)]
+    if let Ok(path) = std::env::var("PATH") {
+        command.env("PATH", &path);
+    }
+    configure_shell_terminal_env(&mut command);
 
     let mut child = pair
         .slave

@@ -3004,6 +3004,17 @@ fn schedule_startup_resize_kick(
 ) {
 }
 
+pub(crate) fn resolve_pty_command_for_os(program: &str, args: &[String]) -> (String, Vec<String>) {
+    #[cfg(windows)]
+    {
+        windows_spawn_command(program, args)
+    }
+    #[cfg(not(windows))]
+    {
+        (program.to_string(), args.to_vec())
+    }
+}
+
 /// Build the `(program, args)` used to launch the inner tool inside the ConPTY
 /// on Windows. Batch-file shims (`.cmd`/`.bat`, e.g. npm-installed codex /
 /// opencode) are wrapped in `cmd.exe /d /c …` because `CreateProcessW` cannot
