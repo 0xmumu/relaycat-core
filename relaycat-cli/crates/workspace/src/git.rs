@@ -8,14 +8,17 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
     sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const GIT_ERROR_MESSAGE_LIMIT: usize = 4 * 1024;
+const MAX_GIT_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+const DEFAULT_GIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone)]
 pub struct GitService { root: ProjectRoot, mutation: Arc<Mutex<()>> }
@@ -159,9 +162,9 @@ impl GitService {
     pub fn apply_patch(&self, patch: &str, cached: bool, reverse: bool) -> Result<GitMutationResult, WorkspaceServiceError> {
         if patch.is_empty() || patch.len() > 2*1024*1024 { return Err(WorkspaceServiceError::invalid("invalid patch size")); }
         let _guard=self.lock_mutation()?; let mut command=self.command(); command.args(["apply","--recount","--whitespace=nowarn"]); if cached{command.arg("--cached");} if reverse{command.arg("--reverse");}
-        let mut child=command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(map_git_command_error)?;
-        child.stdin.take().ok_or_else(||WorkspaceServiceError::invalid("git apply stdin unavailable"))?.write_all(patch.as_bytes()).map_err(WorkspaceServiceError::io)?;
-        let output=child.wait_with_output().map_err(WorkspaceServiceError::io)?; self.success(&output)?; self.mutation_result()
+        let output = run_git_command(command, Some(patch.as_bytes()), DEFAULT_GIT_TIMEOUT)?;
+        self.success(&output)?;
+        self.mutation_result()
     }
     pub fn checkout(&self, reference:&str)->Result<GitMutationResult,WorkspaceServiceError>{if reference.is_empty()||reference.starts_with('-'){return Err(WorkspaceServiceError::invalid("invalid ref"));}self.simple_mutation(&["switch",reference])}
     pub fn create_branch(&self,name:&str,start:&str)->Result<GitMutationResult,WorkspaceServiceError>{self.validate_branch(name)?;if start.starts_with('-'){return Err(WorkspaceServiceError::invalid("invalid start point"));}let mut a=vec!["switch","-c",name];if !start.is_empty(){a.push(start);}self.simple_mutation(&a)}
@@ -216,8 +219,21 @@ impl GitService {
     fn validate_paths(&self,paths:&[String])->Result<(),WorkspaceServiceError>{if paths.is_empty(){return Err(WorkspaceServiceError::invalid("at least one path is required"));}for path in paths{self.root.lexical_path(path)?;}Ok(())}
     fn validate_branch(&self,name:&str)->Result<(),WorkspaceServiceError>{if name.is_empty(){return Err(WorkspaceServiceError::invalid("branch name is required"));}let output=self.output(&["check-ref-format","--branch",name])?;if output.status.success(){Ok(())}else{Err(WorkspaceServiceError::invalid("invalid branch name"))}}
     fn ensure_repo(&self)->Result<(),WorkspaceServiceError>{let output=self.output(&["rev-parse","--git-dir"])?;if output.status.success(){Ok(())}else{Err(WorkspaceServiceError::new(WorkspaceErrorCode::NotGitRepository,"current project is not a Git repository",false))}}
-    fn command(&self)->Command{let mut command=Command::new("git");command.current_dir(self.root.path()).env("GIT_TERMINAL_PROMPT","0").env("GCM_INTERACTIVE","Never").env("LC_ALL","C");command}
-    fn output(&self,args:&[&str])->Result<Output,WorkspaceServiceError>{self.command().args(args).output().map_err(map_git_command_error)}
+    fn command(&self)->Command{
+        let mut command=Command::new("git");
+        command
+            .current_dir(self.root.path())
+            .env("GIT_TERMINAL_PROMPT","0")
+            .env("GCM_INTERACTIVE","Never")
+            .env("GIT_SSH_COMMAND","ssh -oBatchMode=yes -oConnectTimeout=15")
+            .env("LC_ALL","C");
+        command
+    }
+    fn output(&self,args:&[&str])->Result<Output,WorkspaceServiceError>{
+        let mut command = self.command();
+        command.args(args);
+        run_git_command(command, None, DEFAULT_GIT_TIMEOUT)
+    }
     fn text(&self,args:&[&str])->Result<String,WorkspaceServiceError>{let output=self.output(args)?;self.success(&output)?;Ok(String::from_utf8_lossy(&output.stdout).into_owned())}
     fn run_success(&self,args:&[&str])->Result<(),WorkspaceServiceError>{let output=self.output(args)?;self.success(&output)}
     fn success(&self,output:&Output)->Result<(),WorkspaceServiceError>{if output.status.success(){Ok(())}else{let message=sanitize_git_error_message(&String::from_utf8_lossy(&output.stderr));Err(WorkspaceServiceError::new(WorkspaceErrorCode::Conflict,message,false))}}
@@ -234,6 +250,90 @@ fn map_git_command_error(error: std::io::Error) -> WorkspaceServiceError {
     } else {
         WorkspaceServiceError::io(error)
     }
+}
+
+fn run_git_command(
+    mut command: Command,
+    stdin_bytes: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Output, WorkspaceServiceError> {
+    if stdin_bytes.is_some() {
+        command.stdin(Stdio::piped());
+    } else {
+        command.stdin(Stdio::null());
+    }
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(map_git_command_error)?;
+    if let Some(bytes) = stdin_bytes {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| WorkspaceServiceError::invalid("git stdin unavailable"))?;
+        stdin.write_all(bytes).map_err(WorkspaceServiceError::io)?;
+        drop(stdin);
+    }
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| WorkspaceServiceError::invalid("git stdout unavailable"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| WorkspaceServiceError::invalid("git stderr unavailable"))?;
+    let stdout_reader = thread::spawn(move || read_bounded_stream(stdout));
+    let stderr_reader = thread::spawn(move || read_bounded_stream(stderr));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(WorkspaceServiceError::io)? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(WorkspaceServiceError::timeout());
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    let (stdout, stdout_truncated) = stdout_reader
+        .join()
+        .map_err(|_| WorkspaceServiceError::invalid("git stdout reader failed"))??;
+    let (stderr, stderr_truncated) = stderr_reader
+        .join()
+        .map_err(|_| WorkspaceServiceError::invalid("git stderr reader failed"))??;
+    if stdout_truncated || stderr_truncated {
+        return Err(WorkspaceServiceError::new(
+            WorkspaceErrorCode::InvalidRequest,
+            "git output exceeded limit",
+            false,
+        ));
+    }
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn read_bounded_stream(mut stream: impl Read) -> Result<(Vec<u8>, bool), WorkspaceServiceError> {
+    let mut output = Vec::new();
+    let mut truncated = false;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = stream.read(&mut buffer).map_err(WorkspaceServiceError::io)?;
+        if count == 0 {
+            break;
+        }
+        let remaining = MAX_GIT_OUTPUT_BYTES.saturating_sub(output.len());
+        let kept = remaining.min(count);
+        output.extend_from_slice(&buffer[..kept]);
+        truncated |= kept < count;
+    }
+    Ok((output, truncated))
 }
 fn short_oid(oid:&str)->&str{oid.get(..7).unwrap_or(oid)}
 fn plural(count:u32,singular:&str,plural:&str)->String{format!("{count} {}",if count==1{singular}else{plural})}
@@ -388,5 +488,16 @@ mod tests {
         assert!(!message.contains('\u{1b}'));
         assert!(message.len() <= GIT_ERROR_MESSAGE_LIMIT);
         assert!(message.ends_with('…'));
+    }
+
+    #[test]
+    fn run_git_command_times_out_when_process_hangs() {
+        let mut cmd = Command::new("git");
+        cmd.args(["hash-object", "--stdin"]);
+        let mut child_cmd = Command::new("sh");
+        child_cmd.args(["-c", "sleep 2"]);
+        let _ = cmd;
+        let result = run_git_command(child_cmd, None, Duration::from_millis(50));
+        assert_eq!(result.unwrap_err().code(), WorkspaceErrorCode::Timeout);
     }
 }
