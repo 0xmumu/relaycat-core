@@ -187,6 +187,15 @@ test("change list groups files by directory and remembers collapsed folders", ()
   assert.match(css, /\.ws-git-dir\.collapsed \.ws-git-dir-chevron\s*{[^}]*rotate\(-90deg\)/s);
 });
 
+test("history filters collapse behind a toggle and show removable chips", () => {
+  assert.match(html, /id="workspace-history-filters"[^>]*hidden/);
+  assert.match(html, /id="workspace-history-filter-toggle"[^>]*aria-expanded="false"/);
+  assert.match(workspacePanel, /setHistoryFiltersOpen\(false\)/);
+  assert.match(workspacePanel, /workspace_filter_chip_query/);
+  assert.match(workspacePanel, /historyDateLabel\(commit\.date\)/);
+  assert.match(css, /\.ws-history-filters\[hidden\]\s*{[^}]*display:\s*none;/s);
+});
+
 test("Shell mode owns the workspace body without showing file or Git chrome", () => {
   assert.match(css, /\.workspace-panel\.shell-mode \.embedded-shell-panel\s*{[^}]*display:\s*flex;/s);
   assert.match(css, /\.workspace-panel\.shell-mode \.ws-main\s*{[^}]*display:\s*none;/s);

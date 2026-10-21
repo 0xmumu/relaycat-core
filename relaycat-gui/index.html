@@ -206,7 +206,11 @@
               </div>
             </section>
             <section class="ws-browser" id="workspace-history-view" hidden>
-              <div class="ws-history-filters">
+              <div class="ws-history-filterbar">
+                <button class="ws-filter-toggle" id="workspace-history-filter-toggle" type="button" aria-expanded="false" aria-controls="workspace-history-filters" data-i18n="workspace_filter">筛选</button>
+                <div class="ws-history-chips" id="workspace-history-chips"></div>
+              </div>
+              <div class="ws-history-filters" id="workspace-history-filters" hidden>
                 <input class="ws-filter-input" id="workspace-history-query" data-i18n-ph="workspace_history_search" placeholder="搜索提交…" />
                 <input class="ws-filter-input" id="workspace-history-author" data-i18n-ph="workspace_history_author" placeholder="作者" />
                 <select class="ws-select" id="workspace-history-ref"><option value="" data-i18n="workspace_all_refs">全部分支</option></select>

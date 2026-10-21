@@ -28,6 +28,7 @@ import {
   groupGitChanges,
   gitHistoryPage,
   gitStatusFingerprint,
+  gitRelativeTime,
   historyNearBottom,
   canRenderMarkdown,
   formatWorkspaceEntrySize,
@@ -146,6 +147,13 @@ export function createWorkspacePanel(
   const historyAuthor = document.querySelector("#workspace-history-author") as HTMLInputElement;
   const historyRef = document.querySelector("#workspace-history-ref") as HTMLSelectElement;
   const historyFilterBtn = document.querySelector("#workspace-history-filter") as HTMLButtonElement;
+  const historyFilterToggle = document.querySelector(
+    "#workspace-history-filter-toggle",
+  ) as HTMLButtonElement;
+  const historyFiltersPanel = document.querySelector(
+    "#workspace-history-filters",
+  ) as HTMLElement;
+  const historyChips = document.querySelector("#workspace-history-chips") as HTMLElement;
   const workspaceMain = document.querySelector(".ws-main") as HTMLElement;
   const previewResizer = document.querySelector("#workspace-preview-resizer") as HTMLElement;
   const previewTitle = document.querySelector("#workspace-preview-title") as HTMLButtonElement;
@@ -1706,12 +1714,80 @@ export function createWorkspacePanel(
     gitFilterText.title = gitPathFilter.path;
   }
 
+  const RELATIVE_TIME_KEYS: Record<string, string> = {
+    minute: "workspace_time_minutes",
+    hour: "workspace_time_hours",
+    day: "workspace_time_days",
+    month: "workspace_time_months",
+    year: "workspace_time_years",
+  };
+
+  function historyDateLabel(date: string): string {
+    const relative = gitRelativeTime(date);
+    if (!relative) return date;
+    if (relative.unit === "now") return t("workspace_time_now");
+    return t(RELATIVE_TIME_KEYS[relative.unit], relative.value);
+  }
+
+  function renderHistoryChips() {
+    const chips: Array<{ field: "query" | "author" | "reference"; text: string }> = [];
+    if (appliedHistoryFilters.query) {
+      chips.push({
+        field: "query",
+        text: t("workspace_filter_chip_query", appliedHistoryFilters.query),
+      });
+    }
+    if (appliedHistoryFilters.author) {
+      chips.push({
+        field: "author",
+        text: t("workspace_filter_chip_author", appliedHistoryFilters.author),
+      });
+    }
+    if (appliedHistoryFilters.reference) {
+      chips.push({
+        field: "reference",
+        text: t("workspace_filter_chip_ref", appliedHistoryFilters.reference),
+      });
+    }
+    historyChips.replaceChildren(
+      ...chips.map((chip) => {
+        const element = document.createElement("span");
+        element.className = "ws-filter-chip";
+        const text = document.createElement("span");
+        text.className = "ws-filter-chip-text";
+        text.textContent = chip.text;
+        text.title = chip.text;
+        const clear = document.createElement("button");
+        clear.type = "button";
+        clear.className = "ws-filter-chip-clear";
+        clear.textContent = "×";
+        clear.title = t("workspace_filter_clear");
+        clear.onclick = () => {
+          if (chip.field === "query") historyQuery.value = "";
+          else if (chip.field === "author") historyAuthor.value = "";
+          else historyRef.value = "";
+          void refreshHistory(true);
+        };
+        element.append(text, clear);
+        return element;
+      }),
+    );
+    historyFilterToggle.textContent =
+      chips.length > 0 ? t("workspace_filter_active", chips.length) : t("workspace_filter");
+    historyFilterToggle.classList.toggle("filtering", chips.length > 0);
+  }
+
   function appendHistoryRows(commits: GitCommit[]) {
     for (const commit of commits) {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "ws-history-row";
-      row.title = commit.subject;
+      const subjectLine = commit.subject;
+      const parsedDate = new Date(commit.date);
+      const absoluteDate = Number.isNaN(parsedDate.getTime())
+        ? commit.date
+        : parsedDate.toLocaleString();
+      row.title = `${subjectLine}\n${commit.author} · ${absoluteDate}`;
       const hash = document.createElement("span");
       hash.className = "ws-history-graph";
       hash.textContent = commit.parents.length > 1 ? "◆" : "●";
@@ -1723,11 +1799,9 @@ export function createWorkspacePanel(
       subject.textContent = commit.subject;
       const meta = document.createElement("span");
       meta.className = "ws-history-meta";
-      const parsedDate = new Date(commit.date);
-      const date = Number.isNaN(parsedDate.getTime())
-        ? commit.date
-        : parsedDate.toLocaleString();
-      meta.textContent = `${commit.author} · ${date}`;
+      // Relative time keeps the row narrow and stable across locales; the
+      // absolute timestamp stays available in the tooltip.
+      meta.textContent = `${commit.author} · ${historyDateLabel(commit.date)}`;
       body.append(subject, meta);
       if (commit.refs.length > 0) {
         const refs = document.createElement("span");
@@ -1763,6 +1837,7 @@ export function createWorkspacePanel(
         historyAuthor.value,
         historyRef.value,
       );
+      renderHistoryChips();
       historyCommits = [];
       historyHasMore = true;
       historyView.scrollTop = 0;
@@ -2074,7 +2149,29 @@ export function createWorkspacePanel(
     void refreshGit(true);
   };
   amendInput.onchange = updateGitControls;
-  historyFilterBtn.onclick = () => void refreshHistory(true);
+  const setHistoryFiltersOpen = (open: boolean) => {
+    historyFiltersPanel.hidden = !open;
+    historyFilterToggle.setAttribute("aria-expanded", String(open));
+  };
+  historyFilterToggle.onclick = () => {
+    const open = historyFiltersPanel.hidden;
+    setHistoryFiltersOpen(open);
+    if (open) historyQuery.focus();
+  };
+  historyFiltersPanel.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      historyFilterBtn.click();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setHistoryFiltersOpen(false);
+      historyFilterToggle.focus();
+    }
+  });
+  historyFilterBtn.onclick = () => {
+    setHistoryFiltersOpen(false);
+    void refreshHistory(true);
+  };
   historyQuery.onkeydown = (event) => {
     if (event.key === "Enter") void refreshHistory(true);
   };
@@ -2169,6 +2266,11 @@ export function createWorkspacePanel(
       gitPathFilter = null;
       collapsedGitDirs.clear();
       lastGitSections = { conflicted: [], staged: [], unstaged: [] };
+      historyQuery.value = "";
+      historyAuthor.value = "";
+      historyRef.value = "";
+      appliedHistoryFilters = historyFilterArgs("", "", "");
+      renderHistoryChips();
       renderGitFilter();
       fileSearch.value = "";
       fileSearchSequence += 1;
@@ -2208,6 +2310,7 @@ export function createWorkspacePanel(
       renderGitBanner(null);
       branchSelect.innerHTML = "";
       historyRef.innerHTML = `<option value="">${t("workspace_all_refs")}</option>`;
+      renderHistoryChips();
       if (!project) setOpened(false);
     },
     refresh: () => refresh(false),

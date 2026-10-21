@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   groupGitChanges,
   groupChangesByDirectory,
+  gitRelativeTime,
   isConflictedChange,
   isGitNotInstalledError,
   gitStatusFingerprint,
@@ -103,6 +104,21 @@ test("groups changes by directory with aggregated diff stats", () => {
   assert.deepEqual(groups[2].stat, { added: 2, deleted: 0, binary: true });
   assert.deepEqual(groups[0].stat, { added: 1, deleted: 1, binary: false });
   assert.deepEqual(groupChangesByDirectory([]), []);
+});
+
+test("history timestamps fall back to coarse relative units", () => {
+  const now = Date.parse("2026-10-21T12:00:00Z");
+  const at = (secondsAgo: number) => new Date(now - secondsAgo * 1000).toISOString();
+
+  assert.deepEqual(gitRelativeTime(at(5), now), { unit: "now", value: 0 });
+  assert.deepEqual(gitRelativeTime(at(3 * 60), now), { unit: "minute", value: 3 });
+  assert.deepEqual(gitRelativeTime(at(5 * 3600), now), { unit: "hour", value: 5 });
+  assert.deepEqual(gitRelativeTime(at(3 * 86400), now), { unit: "day", value: 3 });
+  assert.deepEqual(gitRelativeTime(at(90 * 86400), now), { unit: "month", value: 3 });
+  assert.deepEqual(gitRelativeTime(at(800 * 86400), now), { unit: "year", value: 2 });
+  // Clock skew must not produce negative ages.
+  assert.deepEqual(gitRelativeTime(at(-120), now), { unit: "now", value: 0 });
+  assert.equal(gitRelativeTime("not a date", now), null);
 });
 
 test("conflicted paths are split into their own group", () => {

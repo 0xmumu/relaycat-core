@@ -432,8 +432,32 @@ export function formatWorkspaceModifiedTime(seconds: number | null | undefined):
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-export type DiffLineKind = "plain" | "add" | "del" | "hunk" | "header";
+export type GitRelativeTimeUnit = "now" | "minute" | "hour" | "day" | "month" | "year";
 
+/**
+ * Coarse "how long ago" for history rows. Locale-independent: the caller maps
+ * the unit to a translated string, so the panel keeps following the in-app
+ * language rather than the OS locale.
+ */
+export function gitRelativeTime(
+  date: string,
+  now = Date.now(),
+): { unit: GitRelativeTimeUnit; value: number } | null {
+  const time = new Date(date).getTime();
+  if (Number.isNaN(time) || !Number.isFinite(now)) return null;
+  const diff = Math.max(0, now - time);
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  if (diff < minute) return { unit: "now", value: 0 };
+  if (diff < hour) return { unit: "minute", value: Math.floor(diff / minute) };
+  if (diff < day) return { unit: "hour", value: Math.floor(diff / hour) };
+  if (diff < 30 * day) return { unit: "day", value: Math.floor(diff / day) };
+  if (diff < 365 * day) return { unit: "month", value: Math.floor(diff / (30 * day)) };
+  return { unit: "year", value: Math.floor(diff / (365 * day)) };
+}
+
+export type DiffLineKind = "plain" | "add" | "del" | "hunk" | "header";
 export interface DiffPreviewLine {
   kind: DiffLineKind;
   prefix: string;
