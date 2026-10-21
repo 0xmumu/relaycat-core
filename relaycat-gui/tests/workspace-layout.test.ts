@@ -139,6 +139,15 @@ test("workspace remembers separate file Git and Shell widths", () => {
   );
 });
 
+test("commit helpers recall recent messages and warn on long subjects", () => {
+  assert.match(html, /id="workspace-commit-recent"/);
+  assert.match(html, /id="workspace-commit-hint"/);
+  assert.match(workspacePanel, /relaycat\.workspaceCommitHistory/);
+  assert.match(workspacePanel, /workspace_commit_subject_long/);
+  assert.match(workspacePanel, /workspace_commit_amend_placeholder/);
+  assert.match(workspacePanel, /ArrowUp/);
+});
+
 test("switching projects drops stale branch and ref options", () => {
   const setProject = workspacePanel.match(
     /setProject\(nextProject\)[\s\S]*?if \(!project\) setOpened\(false\);/,

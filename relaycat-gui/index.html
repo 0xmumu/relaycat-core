@@ -185,9 +185,12 @@
               </div>
               <div class="ws-git-list" id="workspace-git-list"></div>
               <div class="ws-commit-bar" id="workspace-commit-bar">
+                <div class="ws-commit-recent" id="workspace-commit-recent-list" hidden></div>
                 <div class="ws-commit-status" id="workspace-commit-status"></div>
                 <textarea id="workspace-commit-message" class="ws-commit-message" data-i18n-ph="workspace_commit_placeholder" placeholder="提交信息…"></textarea>
+                <div class="ws-commit-hint" id="workspace-commit-hint" hidden></div>
                 <div class="ws-commit-actions">
+                  <button class="ws-small-btn" id="workspace-commit-recent" type="button" data-i18n="workspace_commit_recent" disabled>最近</button>
                   <label class="ws-check"><input id="workspace-amend" type="checkbox" /> <span data-i18n="workspace_amend">修订上次提交</span></label>
                   <button class="ws-small-btn primary" id="workspace-commit" type="button" data-i18n="workspace_commit">提交</button>
                   <button class="ws-small-btn" id="workspace-commit-push" type="button" data-i18n="workspace_commit_push">提交并推送</button>

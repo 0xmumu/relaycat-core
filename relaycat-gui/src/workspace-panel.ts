@@ -121,6 +121,9 @@ export function createWorkspacePanel(
   const unstageAllBtn = document.querySelector("#workspace-unstage-all") as HTMLButtonElement;
   const commitMessage = document.querySelector("#workspace-commit-message") as HTMLTextAreaElement;
   const commitStatus = document.querySelector("#workspace-commit-status") as HTMLElement;
+  const commitHint = document.querySelector("#workspace-commit-hint") as HTMLElement;
+  const commitRecentBtn = document.querySelector("#workspace-commit-recent") as HTMLButtonElement;
+  const commitRecentList = document.querySelector("#workspace-commit-recent-list") as HTMLElement;
   const amendInput = document.querySelector("#workspace-amend") as HTMLInputElement;
   const commitBtn = document.querySelector("#workspace-commit") as HTMLButtonElement;
   const commitPushBtn = document.querySelector("#workspace-commit-push") as HTMLButtonElement;
@@ -160,6 +163,10 @@ export function createWorkspacePanel(
   let repositoryBehind = 0;
   let gitOperationRunning = false;
   let commitMenu: HTMLElement | null = null;
+  const RECENT_COMMIT_STORAGE_KEY = "relaycat.workspaceCommitHistory";
+  const RECENT_COMMIT_LIMIT = 5;
+  const COMMIT_SUBJECT_LIMIT = 50;
+  let recentCommitMessages = loadRecentCommitMessages();
   let stagedPaths: string[] = [];
   let unstagedPaths: string[] = [];
   let previewCollapsed = workspacePreviewStartsCollapsed(mode);
@@ -927,6 +934,70 @@ export function createWorkspacePanel(
       stagedCount > 0
         ? t("workspace_commit_staged", stagedCount)
         : t("workspace_commit_empty");
+    const firstLine = commitMessage.value.split("\n", 1)[0] ?? "";
+    const subjectTooLong = firstLine.length > COMMIT_SUBJECT_LIMIT;
+    commitHint.hidden = !subjectTooLong;
+    if (subjectTooLong) {
+      commitHint.textContent = t("workspace_commit_subject_long", firstLine.length);
+    }
+    commitMessage.placeholder =
+      amendInput.checked && !commitMessage.value.trim()
+        ? t("workspace_commit_amend_placeholder")
+        : t("workspace_commit_placeholder");
+  }
+
+  function loadRecentCommitMessages(): string[] {
+    try {
+      const raw = localStorage.getItem(RECENT_COMMIT_STORAGE_KEY);
+      if (!raw) return [];
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0,
+        )
+        .slice(0, RECENT_COMMIT_LIMIT);
+    } catch {
+      return [];
+    }
+  }
+
+  function renderRecentCommitMessages() {
+    commitRecentBtn.disabled = recentCommitMessages.length === 0;
+    commitRecentList.innerHTML = "";
+    if (recentCommitMessages.length === 0) {
+      commitRecentList.hidden = true;
+      return;
+    }
+    for (const message of recentCommitMessages) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = message.split("\n", 1)[0];
+      button.title = message;
+      button.onclick = () => {
+        commitMessage.value = message;
+        commitRecentList.hidden = true;
+        updateGitControls();
+        commitMessage.focus();
+      };
+      commitRecentList.appendChild(button);
+    }
+  }
+
+  function rememberCommitMessage(message: string) {
+    const value = message.trim();
+    if (!value) return;
+    recentCommitMessages = [
+      value,
+      ...recentCommitMessages.filter((item) => item !== value),
+    ].slice(0, RECENT_COMMIT_LIMIT);
+    try {
+      localStorage.setItem(RECENT_COMMIT_STORAGE_KEY, JSON.stringify(recentCommitMessages));
+    } catch {
+      // Storage can be unavailable; the in-memory list still works.
+    }
+    renderRecentCommitMessages();
   }
 
   async function runGitMutation(
@@ -1681,11 +1752,13 @@ export function createWorkspacePanel(
   pullBtn.onclick = () => void remoteOperation("pull");
   pushBtn.onclick = () => void remoteOperation("push");
   const createCommit = async (push: boolean) => {
+    const message = commitMessage.value;
     const ok = await runGitMutation(t("workspace_commit"), "git_create_commit", {
-      message: commitMessage.value,
+      message,
       amend: amendInput.checked,
     });
     if (!ok) return;
+    rememberCommitMessage(message);
     commitMessage.value = "";
     amendInput.checked = false;
     setOperation(t("workspace_commit_success"));
@@ -1696,6 +1769,22 @@ export function createWorkspacePanel(
   commitBtn.onclick = () => void createCommit(false);
   commitPushBtn.onclick = () => void createCommit(true);
   commitMessage.oninput = updateGitControls;
+  commitMessage.onkeydown = (event) => {
+    // Arrow-up on an empty composer recalls the last message, like a shell.
+    if (
+      event.key === "ArrowUp" &&
+      !commitMessage.value.trim() &&
+      recentCommitMessages.length > 0
+    ) {
+      event.preventDefault();
+      commitMessage.value = recentCommitMessages[0];
+      updateGitControls();
+    }
+  };
+  commitRecentBtn.onclick = () => {
+    if (recentCommitMessages.length === 0) return;
+    commitRecentList.hidden = !commitRecentList.hidden;
+  };
   amendInput.onchange = updateGitControls;
   historyFilterBtn.onclick = () => void refreshHistory(true);
   historyQuery.onkeydown = (event) => {
@@ -1706,6 +1795,14 @@ export function createWorkspacePanel(
   };
   document.addEventListener("pointerdown", (event) => {
     if (commitMenu && !commitMenu.contains(event.target as Node)) closeCommitMenu();
+    const target = event.target as Node;
+    if (
+      !commitRecentList.hidden &&
+      !commitRecentList.contains(target) &&
+      !commitRecentBtn.contains(target)
+    ) {
+      commitRecentList.hidden = true;
+    }
   });
   historyView.addEventListener(
     "scroll",
@@ -1753,6 +1850,8 @@ export function createWorkspacePanel(
 
   clearPreview();
   setPreviewCollapsed(previewCollapsed);
+  renderRecentCommitMessages();
+  updateCommitBar();
   renderState(fileTree, t("workspace_loading"));
   renderState(gitList, t("workspace_loading"));
   renderState(historyList, t("workspace_loading"));
