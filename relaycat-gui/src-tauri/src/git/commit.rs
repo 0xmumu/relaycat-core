@@ -1,9 +1,15 @@
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::runner::{git_output, project_root};
+
+/// Distinguishes message files created in the same clock tick, since the
+/// nanosecond clock is not fine-grained enough to keep concurrent commits
+/// (or parallel tests) from picking the same name on some platforms.
+static COMMIT_MESSAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn create_commit(project: &str, message: &str, amend: bool) -> Result<String, String> {
     if !amend && message.trim().is_empty() {
@@ -40,14 +46,6 @@ pub(super) fn create_commit(project: &str, message: &str, amend: bool) -> Result
             return Err("staged files exist outside the session project".into());
         }
     }
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| e.to_string())?
-        .as_nanos();
-    let message_path = std::env::temp_dir().join(format!(
-        "relaycat-commit-{}-{nonce}.txt",
-        std::process::id()
-    ));
     let effective_message = if amend && message.trim().is_empty() {
         // Amending without a new message keeps the previous one. Passing -F
         // with an empty file would fail, and dropping the message options
@@ -60,7 +58,7 @@ pub(super) fn create_commit(project: &str, message: &str, amend: bool) -> Result
     } else {
         message.to_string()
     };
-    write_commit_message(&message_path, &effective_message)?;
+    let message_path = create_commit_message_file(&effective_message)?;
     let message_arg = message_path.to_string_lossy().into_owned();
     let mut args = vec!["commit", "-F", message_arg.as_str()];
     if amend {
@@ -76,7 +74,38 @@ pub(super) fn create_commit(project: &str, message: &str, amend: bool) -> Result
     }
 }
 
-fn write_commit_message(path: &Path, message: &str) -> Result<(), String> {
+fn commit_message_path() -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = COMMIT_MESSAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "relaycat-commit-{}-{nonce}-{sequence}.txt",
+        std::process::id()
+    ))
+}
+
+/// Creates the message file exclusively (`create_new`): concurrent commits can
+/// never share a path, and a pre-existing file — including a planted symlink
+/// in the shared temp directory — is never followed.
+fn create_commit_message_file(message: &str) -> Result<PathBuf, String> {
+    for _ in 0..8 {
+        let path = commit_message_path();
+        match open_private_file(&path) {
+            Ok(mut file) => {
+                file.write_all(message.as_bytes())
+                    .map_err(|e| e.to_string())?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("could not create a temporary commit message file".into())
+}
+
+fn open_private_file(path: &Path) -> std::io::Result<fs::File> {
     // Commit messages can contain sensitive context; keep the temp file
     // readable by its owner only where the platform supports it.
     let result = {
@@ -85,16 +114,16 @@ fn write_commit_message(path: &Path, message: &str) -> Result<(), String> {
             use std::os::unix::fs::OpenOptionsExt;
             fs::OpenOptions::new()
                 .write(true)
-                .create(true)
-                .truncate(true)
+                .create_new(true)
                 .mode(0o600)
                 .open(path)
-                .and_then(|mut file| file.write_all(message.as_bytes()))
-                .map_err(|e| e.to_string())
         }
         #[cfg(not(unix))]
         {
-            fs::write(path, message).map_err(|e| e.to_string())
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
         }
     };
     result
@@ -204,5 +233,35 @@ mod tests {
             .unwrap();
         fs::remove_dir_all(&repo).unwrap();
         assert_eq!(String::from_utf8_lossy(&subject.stdout).trim(), "first message");
+    }
+
+    #[test]
+    fn concurrent_commit_message_files_never_share_a_path() {
+        let handles = (0..16)
+            .map(|index| {
+                std::thread::spawn(move || {
+                    let message = format!("message-{index}");
+                    let path = create_commit_message_file(&message).unwrap();
+                    (path, message)
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+
+        let mut paths = results
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+
+        for (path, message) in &results {
+            assert_eq!(fs::read_to_string(path).unwrap(), message.as_str());
+            let _ = fs::remove_file(path);
+        }
+        assert_eq!(paths.len(), results.len());
     }
 }
