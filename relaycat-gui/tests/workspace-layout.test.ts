@@ -52,6 +52,16 @@ test("preview offers line numbers, a wrap toggle and a jump to the file", () => 
   assert.match(css, /\.ws-preview-code\.show-line-numbers \.ws-code-line::before\s*{[^}]*counter\(ws-line\)/s);
 });
 
+test("the header names the current section and its size", () => {
+  assert.match(html, /id="workspace-project-name"/);
+  assert.match(html, /id="workspace-context"/);
+  assert.match(workspacePanel, /function renderContext\(\)/);
+  assert.match(workspacePanel, /workspace_context_changes/);
+  assert.match(workspacePanel, /workspace_context_history/);
+  assert.match(workspacePanel, /changedPathCount = new Set\(status\.changes/);
+  assert.match(css, /\.ws-context\s*{[^}]*color:\s*var\(--dim\);/s);
+});
+
 test("the panel floor is 320px and sync buttons degrade when narrow", () => {
   assert.match(css, /\.workspace-panel\s*{[^}]*min-width:\s*320px;/s);
   assert.match(workspacePanel, /panel\.classList\.toggle\("narrow"/);

@@ -671,6 +671,12 @@ body.ws-resizing .workspace-resizer {
   font-family: var(--mono);
   font-weight: 600;
 }
+.ws-context {
+  margin-left: 8px;
+  color: var(--dim);
+  font-size: 10.5px;
+  font-weight: 400;
+}
 .ws-header-actions {
   display: flex;
   align-items: center;

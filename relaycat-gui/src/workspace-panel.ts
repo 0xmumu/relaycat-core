@@ -113,6 +113,8 @@ export function createWorkspacePanel(
   const refreshBtn = document.querySelector("#workspace-refresh") as HTMLButtonElement;
   const refreshProgress = document.querySelector("#workspace-refresh-progress") as HTMLElement;
   const projectLabel = document.querySelector("#workspace-project") as HTMLElement;
+  const projectName = document.querySelector("#workspace-project-name") as HTMLElement;
+  const workspaceContext = document.querySelector("#workspace-context") as HTMLElement;
   const gitTab = document.querySelector("#workspace-tab-git") as HTMLButtonElement;
   const historyTab = document.querySelector("#workspace-tab-history") as HTMLButtonElement;
   const filesView = document.querySelector("#workspace-files-view") as HTMLElement;
@@ -184,6 +186,9 @@ export function createWorkspacePanel(
   let historyRequestSequence = 0;
   let appliedHistoryFilters = historyFilterArgs("", "", "");
   let stagedCount = 0;
+  // Unique changed paths in the repository, independent of the path filter, so
+  // the header keeps reporting the real size of the change set.
+  let changedPathCount = 0;
   let repositoryAhead = 0;
   let repositoryBehind = 0;
   let gitOperationRunning = false;
@@ -1438,6 +1443,7 @@ export function createWorkspacePanel(
       }
       rows.replaceChildren(...nodes);
     }
+    renderContext();
   }
 
   const OPERATION_LABEL_KEYS: Record<string, string> = {
@@ -1530,12 +1536,14 @@ export function createWorkspacePanel(
         historyRef.innerHTML = `<option value="">${t("workspace_all_refs")}</option>`;
         const labels = gitSyncButtonLabels(0, 0, t("workspace_pull"), t("workspace_push"));
         pullBtn.textContent = labels.pull;
-
         pullBtn.title = labels.pull;
         pushBtn.textContent = labels.push;
         pushBtn.title = labels.push;
         renderGitBanner(null);
         renderState(gitList, t("workspace_not_repo"));
+        lastGitSections = { conflicted: [], staged: [], unstaged: [] };
+        changedPathCount = 0;
+        renderContext();
         return true;
       }
       repositoryAhead = summary.ahead;
@@ -1549,7 +1557,6 @@ export function createWorkspacePanel(
         t("workspace_push"),
       );
       pullBtn.textContent = labels.pull;
-
       pullBtn.title = labels.pull;
       pushBtn.textContent = labels.push;
       pushBtn.title = labels.push;
@@ -1596,6 +1603,7 @@ export function createWorkspacePanel(
       stagedPaths = [...new Set(allSections.staged.map((change) => change.path))];
       unstagedPaths = [...new Set(allSections.unstaged.map((change) => change.path))];
       stagedCount = stagedPaths.length;
+      changedPathCount = new Set(status.changes.map((change) => change.path)).size;
       updateGitControls();
       if (
         sections.conflicted.length === 0 &&
@@ -1911,6 +1919,7 @@ export function createWorkspacePanel(
           historyHasMore = false;
           loadedViews.add("history");
           renderState(historyList, t("workspace_not_repo"));
+          renderContext();
           return true;
         }
       }
@@ -1935,6 +1944,7 @@ export function createWorkspacePanel(
       } else {
         appendHistoryRows(commits);
       }
+      renderContext();
       return true;
     } catch (error) {
       if (
@@ -2008,6 +2018,38 @@ export function createWorkspacePanel(
     scheduleLayoutChange();
   }
 
+  /**
+   * Files mode hides the whole tab strip, so the header is the only place that
+   * can say which section is on screen. The context hint also carries the size
+   * of the list, which is the first thing you want to know after switching.
+   */
+  function renderContext() {
+    if (!project) {
+      workspaceContext.textContent = "";
+      return;
+    }
+    if (mode === "files") {
+      workspaceContext.textContent = t("workspace_context_files");
+      return;
+    }
+    if (mode === "shell") {
+      workspaceContext.textContent = t("workspace_context_shell");
+      return;
+    }
+    if (mode === "git") {
+      workspaceContext.textContent =
+        changedPathCount > 0
+          ? t("workspace_context_changes", changedPathCount)
+          : t("workspace_context_changes_empty");
+      return;
+    }
+    const total = historyHasMore ? `${historyCommits.length}+` : String(historyCommits.length);
+    workspaceContext.textContent =
+      historyCommits.length > 0
+        ? t("workspace_context_history", total)
+        : t("workspace_context_history_empty");
+  }
+
   function setMode(next: WorkspaceMode) {
     // Clicking the tab you are already on must not refetch or re-render.
     if (opened && mode === next) return;
@@ -2030,6 +2072,7 @@ export function createWorkspacePanel(
     restorePanelWidth(mode);
     onModeChange(mode);
     syncOpenModeClasses();
+    renderContext();
     if (shellActive) {
       stopRefreshTimer();
     } else {
@@ -2354,9 +2397,9 @@ export function createWorkspacePanel(
       stagedPaths = [];
       unstagedPaths = [];
       stagedCount = 0;
+      changedPathCount = 0;
       const labels = gitSyncButtonLabels(0, 0, t("workspace_pull"), t("workspace_push"));
       pullBtn.textContent = labels.pull;
-
       pullBtn.title = labels.pull;
       pushBtn.textContent = labels.push;
       pushBtn.title = labels.push;
@@ -2365,8 +2408,9 @@ export function createWorkspacePanel(
       updateGitControls();
       setOperation("", false);
       closeCommitMenu();
-      projectLabel.textContent = project ? projectBasename(project) : "";
+      projectName.textContent = project ? projectBasename(project) : "";
       projectLabel.title = project ?? "";
+      renderContext();
       clearPreview();
       setPreviewCollapsed(
         mode === "shell"
