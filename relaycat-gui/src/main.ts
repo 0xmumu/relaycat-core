@@ -26,7 +26,6 @@ import { projectRowMenuItems } from "./project-row-menu";
 import { restoreTerminalFocusAfterOverlayClose } from "./pairing-focus";
 import { runSplitAction } from "./split-action";
 import {
-  appendedTextareaText,
   attachTerminalImeHandler,
   splitToolArgs,
   truncateUtf8,

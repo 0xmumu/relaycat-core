@@ -335,6 +335,7 @@ export function createEmbeddedShellPanel(
       ready: Promise.resolve(),
       closing: false,
       snapshotApplied: kind === "local",
+      lastAppliedOutputSeq: 0,
       pendingOutput: [],
       term,
       fit,
