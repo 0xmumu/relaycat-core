@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import { renderSafeMarkdown } from "./markdown-preview";
+import { purifySvgMarkup, renderSafeMarkdown } from "./markdown-preview";
 import {
   developerPreviewKind,
   parseDelimitedPreview,
@@ -320,7 +320,14 @@ export function createWorkspacePanel(
         };
       } else if (kind === "svg") {
         const safe = sanitizeSvgPreview(content);
-        renderer = () => { const frame = document.createElement("div"); frame.className = "ws-svg-preview"; frame.innerHTML = safe; markdownPreview.appendChild(frame); };
+        renderer = () => {
+          const frame = document.createElement("div");
+          frame.className = "ws-svg-preview";
+          // The regex pre-sanitizer strips active content; DOMPurify is a
+          // second pass against mutation-based bypasses before innerHTML.
+          frame.innerHTML = purifySvgMarkup(safe);
+          markdownPreview.appendChild(frame);
+        };
       } else {
         renderer = () => {};
       }
