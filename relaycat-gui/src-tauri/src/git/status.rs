@@ -187,9 +187,50 @@ pub(super) fn repository_summary(project: &str) -> Result<RepositorySummaryDto, 
     })
 }
 
+pub(super) fn init_repository(project: &str) -> Result<(), String> {
+    let root = project_root(project)?;
+    // `git init` inside an existing repository creates a nested one, so treat
+    // an existing .git (directory for normal repos, file for worktrees) as a
+    // no-op and let the caller refresh instead.
+    if root.join(".git").exists() {
+        return Ok(());
+    }
+    let output = git_output(&root, &["init"])?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_project(label: &str) -> std::path::PathBuf {
+        let sequence = TEST_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "relaycat-status-{label}-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn initializes_a_repository_and_tolerates_a_second_call() {
+        let root = temp_project("init");
+        init_repository(root.to_str().unwrap()).unwrap();
+        assert!(root.join(".git").is_dir());
+        // A second initialization must not fail when the repository exists.
+        init_repository(root.to_str().unwrap()).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn parses_numstat_entries_and_flags_binary_files() {

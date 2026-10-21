@@ -898,6 +898,16 @@ body.ws-preview-resizing .ws-preview-resizer::after {
   font-size: 12px;
   text-align: center;
 }
+.ws-state-action {
+  margin-top: 10px;
+}
+.ws-state-hint {
+  margin-top: 6px;
+  color: var(--dim);
+  font-size: 10px;
+  opacity: 0.75;
+  user-select: text;
+}
 .ws-directory-more,
 .ws-directory-cap {
   width: 100%;

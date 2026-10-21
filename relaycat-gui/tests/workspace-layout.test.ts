@@ -52,6 +52,14 @@ test("preview offers line numbers, a wrap toggle and a jump to the file", () => 
   assert.match(css, /\.ws-preview-code\.show-line-numbers \.ws-code-line::before\s*{[^}]*counter\(ws-line\)/s);
 });
 
+test("dead-end empty states offer the next step", () => {
+  assert.match(workspacePanel, /git_init_repository/);
+  assert.match(workspacePanel, /workspace_init_repo_confirm/);
+  assert.match(workspacePanel, /workspace_filter_clear_scope/);
+  assert.match(workspacePanel, /git-scm\.com\/downloads/);
+  assert.match(css, /\.ws-state-action\s*{[^}]*margin-top:/s);
+});
+
 test("the header names the current section and its size", () => {
   assert.match(html, /id="workspace-project-name"/);
   assert.match(html, /id="workspace-context"/);
@@ -208,7 +216,7 @@ test("switching projects drops stale branch and ref options", () => {
   assert.match(setProject, /branchSelect\.innerHTML = ""/);
   assert.match(setProject, /historyRef\.innerHTML/);
   const notRepo = workspacePanel.match(
-    /if \(!status\.is_repo\)[\s\S]*?renderState\(gitList, t\("workspace_not_repo"\)\)/,
+    /if \(!status\.is_repo\)[\s\S]*?renderState\(gitList, t\("workspace_not_repo"\)/,
   )?.[0] ?? "";
   assert.match(notRepo, /branchSelect\.innerHTML = ""/);
 });

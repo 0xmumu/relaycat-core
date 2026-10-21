@@ -154,6 +154,13 @@ pub async fn git_operation_action(project: String, action: String) -> Result<(),
 }
 
 #[tauri::command]
+pub async fn git_init_repository(project: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || status::init_repository(&project))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn git_workspace_diff_stat(project: String) -> Result<GitDiffStatDto, String> {
     tauri::async_runtime::spawn_blocking(move || status::diff_stat(&project))
         .await

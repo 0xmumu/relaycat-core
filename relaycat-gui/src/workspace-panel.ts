@@ -279,11 +279,31 @@ export function createWorkspacePanel(
     });
   }
 
-  function renderState(container: HTMLElement, message: string) {
+  function renderState(
+    container: HTMLElement,
+    message: string,
+    options: { action?: { label: string; run: () => void }; hint?: string } = {},
+  ) {
     container.innerHTML = "";
     const state = document.createElement("div");
     state.className = "ws-state";
-    state.textContent = message;
+    const text = document.createElement("div");
+    text.textContent = message;
+    state.appendChild(text);
+    if (options.action) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ws-small-btn ws-state-action";
+      button.textContent = options.action.label;
+      button.onclick = () => options.action?.run();
+      state.appendChild(button);
+    }
+    if (options.hint) {
+      const hint = document.createElement("div");
+      hint.className = "ws-state-hint";
+      hint.textContent = options.hint;
+      state.appendChild(hint);
+    }
     container.appendChild(state);
   }
 
@@ -1540,7 +1560,9 @@ export function createWorkspacePanel(
         pushBtn.textContent = labels.push;
         pushBtn.title = labels.push;
         renderGitBanner(null);
-        renderState(gitList, t("workspace_not_repo"));
+        renderState(gitList, t("workspace_not_repo"), {
+          action: { label: t("workspace_init_repo"), run: () => void initRepository() },
+        });
         lastGitSections = { conflicted: [], staged: [], unstaged: [] };
         changedPathCount = 0;
         renderContext();
@@ -1610,10 +1632,16 @@ export function createWorkspacePanel(
         sections.staged.length === 0 &&
         sections.unstaged.length === 0
       ) {
-        renderState(
-          gitList,
-          t(gitPathFilter ? "workspace_filter_no_changes" : "workspace_no_changes"),
-        );
+        if (gitPathFilter) {
+          renderState(gitList, t("workspace_filter_no_changes"), {
+            action: {
+              label: t("workspace_filter_clear_scope"),
+              run: clearGitPathFilter,
+            },
+          });
+        } else {
+          renderState(gitList, t("workspace_no_changes"));
+        }
         return true;
       }
       reconcileGitSections(sections.conflicted, sections.staged, sections.unstaged);
@@ -1629,7 +1657,9 @@ export function createWorkspacePanel(
         return false;
       }
       if (isGitNotInstalledError(error)) {
-        renderState(gitList, t("workspace_git_not_installed"));
+        renderState(gitList, t("workspace_git_not_installed"), {
+          hint: "git-scm.com/downloads",
+        });
       } else {
         renderLoadError(gitList, error);
       }
@@ -1761,6 +1791,12 @@ export function createWorkspacePanel(
     menu.appendChild(button);
     document.body.appendChild(menu);
     fileMenu = menu;
+  }
+
+  function clearGitPathFilter() {
+    gitPathFilter = null;
+    renderGitFilter();
+    void refreshGit(true);
   }
 
   function renderGitFilter() {
@@ -1918,7 +1954,9 @@ export function createWorkspacePanel(
         if (!status.is_repo) {
           historyHasMore = false;
           loadedViews.add("history");
-          renderState(historyList, t("workspace_not_repo"));
+          renderState(historyList, t("workspace_not_repo"), {
+            action: { label: t("workspace_init_repo"), run: () => void initRepository() },
+          });
           renderContext();
           return true;
         }
@@ -2018,12 +2056,19 @@ export function createWorkspacePanel(
     scheduleLayoutChange();
   }
 
+  async function initRepository() {
+    if (!project) return;
+    const ok = await confirm(t("workspace_init_repo_confirm"));
+    if (!ok) return;
+    const created = await runGitMutation(t("workspace_init_repo"), "git_init_repository");
+    if (created && mode === "history") void refreshHistory(true);
+  }
+
   /**
    * Files mode hides the whole tab strip, so the header is the only place that
    * can say which section is on screen. The context hint also carries the size
    * of the list, which is the first thing you want to know after switching.
-   */
-  function renderContext() {
+   */  function renderContext() {
     if (!project) {
       workspaceContext.textContent = "";
       return;
@@ -2248,11 +2293,7 @@ export function createWorkspacePanel(
     if (recentCommitMessages.length === 0) return;
     commitRecentList.hidden = !commitRecentList.hidden;
   };
-  gitFilterClear.onclick = () => {
-    gitPathFilter = null;
-    renderGitFilter();
-    void refreshGit(true);
-  };
+  gitFilterClear.onclick = () => clearGitPathFilter();
   amendInput.onchange = updateGitControls;
   const setHistoryFiltersOpen = (open: boolean) => {
     historyFiltersPanel.hidden = !open;
