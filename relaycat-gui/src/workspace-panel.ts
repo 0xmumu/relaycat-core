@@ -37,7 +37,6 @@ import {
   tokenizeDiffLine,
   tokenizePreviewLine,
   uniqueWorkspaceEntries,
-  workspaceCommitPresentation,
   workspacePanelWidth,
   workspaceLocalPreviewLimit,
   workspaceEntryDecoration,
@@ -121,9 +120,7 @@ export function createWorkspacePanel(
   const stageAllBtn = document.querySelector("#workspace-stage-all") as HTMLButtonElement;
   const unstageAllBtn = document.querySelector("#workspace-unstage-all") as HTMLButtonElement;
   const commitMessage = document.querySelector("#workspace-commit-message") as HTMLTextAreaElement;
-  const commitLauncher = document.querySelector("#workspace-commit-launcher") as HTMLButtonElement;
-  const commitBox = document.querySelector("#workspace-commit-box") as HTMLElement;
-  const commitClose = document.querySelector("#workspace-commit-close") as HTMLButtonElement;
+  const commitStatus = document.querySelector("#workspace-commit-status") as HTMLElement;
   const amendInput = document.querySelector("#workspace-amend") as HTMLInputElement;
   const commitBtn = document.querySelector("#workspace-commit") as HTMLButtonElement;
   const commitPushBtn = document.querySelector("#workspace-commit-push") as HTMLButtonElement;
@@ -159,7 +156,6 @@ export function createWorkspacePanel(
   let historyRequestSequence = 0;
   let appliedHistoryFilters = historyFilterArgs("", "", "");
   let stagedCount = 0;
-  let commitExpanded = false;
   let repositoryAhead = 0;
   let repositoryBehind = 0;
   let gitOperationRunning = false;
@@ -923,14 +919,14 @@ export function createWorkspacePanel(
     const enabled = canCommit(commitMessage.value, stagedCount, amendInput.checked);
     commitBtn.disabled = gitOperationRunning || !enabled;
     commitPushBtn.disabled = gitOperationRunning || !enabled;
-    updateCommitPresentation();
+    updateCommitBar();
   }
 
-  function updateCommitPresentation() {
-    if (stagedCount === 0) commitExpanded = false;
-    const presentation = workspaceCommitPresentation(stagedCount, commitExpanded);
-    commitLauncher.hidden = !presentation.showLauncher;
-    commitBox.hidden = !presentation.showForm;
+  function updateCommitBar() {
+    commitStatus.textContent =
+      stagedCount > 0
+        ? t("workspace_commit_staged", stagedCount)
+        : t("workspace_commit_empty");
   }
 
   async function runGitMutation(
@@ -1692,7 +1688,6 @@ export function createWorkspacePanel(
     if (!ok) return;
     commitMessage.value = "";
     amendInput.checked = false;
-    commitExpanded = false;
     setOperation(t("workspace_commit_success"));
     updateGitControls();
     await refreshHistory(true);
@@ -1700,16 +1695,6 @@ export function createWorkspacePanel(
   };
   commitBtn.onclick = () => void createCommit(false);
   commitPushBtn.onclick = () => void createCommit(true);
-  commitLauncher.onclick = () => {
-    commitExpanded = true;
-    updateCommitPresentation();
-    commitMessage.focus();
-  };
-  commitClose.onclick = () => {
-    commitExpanded = false;
-    commitMessage.blur();
-    updateCommitPresentation();
-  };
   commitMessage.oninput = updateGitControls;
   amendInput.onchange = updateGitControls;
   historyFilterBtn.onclick = () => void refreshHistory(true);
@@ -1807,7 +1792,6 @@ export function createWorkspacePanel(
       stagedPaths = [];
       unstagedPaths = [];
       stagedCount = 0;
-      commitExpanded = false;
       const labels = gitSyncButtonLabels(0, 0, t("workspace_pull"), t("workspace_push"));
       pullBtn.textContent = labels.pull;
       pushBtn.textContent = labels.push;

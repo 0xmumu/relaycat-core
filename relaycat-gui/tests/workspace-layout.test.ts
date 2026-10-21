@@ -59,14 +59,18 @@ test("the Git changes toolbar omits low-frequency branch management buttons", ()
   assert.doesNotMatch(html, /id="workspace-delete-branch"/);
 });
 
-test("Git commit form collapses behind a bottom-right launcher", () => {
-  assert.match(html, /id="workspace-commit-launcher"[^>]*hidden/);
-  assert.match(html, /id="workspace-commit-box"[^>]*hidden/);
-  assert.match(html, /id="workspace-commit-close"/);
-  assert.match(css, /#workspace-git-view:not\(\[hidden\]\)\s*{[^}]*position:\s*relative;[^}]*overflow:\s*hidden;/s);
+test("the commit composer stays visible above the change list", () => {
+  assert.match(html, /id="workspace-commit-bar"/);
+  assert.match(html, /id="workspace-commit-status"/);
+  assert.doesNotMatch(html, /workspace-commit-launcher/);
+  assert.doesNotMatch(workspacePanel, /workspaceCommitPresentation/);
+  assert.match(
+    css,
+    /#workspace-git-view:not\(\[hidden\]\)\s*{[^}]*overflow:\s*hidden;/s,
+  );
   assert.match(css, /\.ws-git-list\s*{[^}]*overflow:\s*auto;/s);
-  assert.match(css, /\.ws-commit-launcher\s*{[^}]*position:\s*absolute;[^}]*right:[^;]+;[^}]*bottom:[^;]+;[^}]*border-radius:\s*50%;/s);
-  assert.match(workspacePanel, /workspaceCommitPresentation\(stagedCount,\s*commitExpanded\)/);
+  assert.match(css, /\.ws-commit-bar\s*{[^}]*border-top:\s*1px solid/s);
+  assert.match(workspacePanel, /function updateCommitBar\(/);
 });
 
 test("file rows reserve a compact metadata column", () => {

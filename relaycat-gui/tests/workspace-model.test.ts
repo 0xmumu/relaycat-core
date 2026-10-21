@@ -22,7 +22,6 @@ import {
   tokenizePreviewLine,
   tokenizeDiffLine,
   uniqueWorkspaceEntries,
-  workspaceCommitPresentation,
   workspaceEntryDecoration,
   workspacePanelWidth,
   workspaceLocalPreviewLimit,
@@ -265,21 +264,6 @@ test("formats workspace entry metadata compactly", () => {
   assert.equal(formatWorkspaceEntrySize(2 * 1024 * 1024, false), "2 MB");
   assert.equal(formatWorkspaceModifiedTime(null), "");
   assert.match(formatWorkspaceModifiedTime(1_700_000_000), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
-});
-
-test("commit presentation hides empty state and collapses behind a launcher", () => {
-  assert.deepEqual(workspaceCommitPresentation(0, false), {
-    showLauncher: false,
-    showForm: false,
-  });
-  assert.deepEqual(workspaceCommitPresentation(2, false), {
-    showLauncher: true,
-    showForm: false,
-  });
-  assert.deepEqual(workspaceCommitPresentation(2, true), {
-    showLauncher: false,
-    showForm: true,
-  });
 });
 
 test("diff syntax keeps prefixes while highlighting source tokens", () => {

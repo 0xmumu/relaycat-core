@@ -389,17 +389,6 @@ export function formatWorkspaceModifiedTime(seconds: number | null | undefined):
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-export function workspaceCommitPresentation(
-  stagedCount: number,
-  expanded: boolean,
-): { showLauncher: boolean; showForm: boolean } {
-  const hasStagedChanges = stagedCount > 0;
-  return {
-    showLauncher: hasStagedChanges && !expanded,
-    showForm: hasStagedChanges && expanded,
-  };
-}
-
 export type DiffLineKind = "plain" | "add" | "del" | "hunk" | "header";
 
 export interface DiffPreviewLine {
