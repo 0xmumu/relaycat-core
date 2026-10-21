@@ -6,6 +6,7 @@ import {
   canCommit,
   buildSelectedLinesPatch,
   changeActionPolicy,
+  classifyGitError,
   gitOperationActions,
   gitOperationControls,
   gitMutationUsesInlineFeedback,
@@ -79,6 +80,40 @@ test("operation banners only offer actions that can finish the operation", () =>
   assert.deepEqual(gitOperationActions("cherry_pick"), ["continue", "skip", "abort"]);
   assert.deepEqual(gitOperationActions("revert"), ["continue", "skip", "abort"]);
   assert.deepEqual(gitOperationActions("merge"), ["abort"]);
+});
+
+test("classifies common git failures into actionable error codes", () => {
+  assert.equal(
+    classifyGitError("fatal: Authentication failed for 'https://example.test/repo.git/'"),
+    "auth_failed",
+  );
+  assert.equal(
+    classifyGitError("! [rejected] main -> main (non-fast-forward)"),
+    "non_fast_forward",
+  );
+  assert.equal(
+    classifyGitError("fatal: The current branch topic has no upstream branch"),
+    "no_upstream",
+  );
+  assert.equal(
+    classifyGitError("error: Your local changes to the following files would be overwritten by merge"),
+    "dirty_worktree",
+  );
+  assert.equal(
+    classifyGitError("CONFLICT (content): Merge conflict in src/a.ts"),
+    "conflict",
+  );
+  assert.equal(
+    classifyGitError("husky - pre-commit hook exited with code 1"),
+    "hook_failed",
+  );
+  assert.equal(classifyGitError("nothing to commit, working tree clean"), "nothing_to_commit");
+  assert.equal(classifyGitError("fatal: You are not currently on a branch."), "detached_head");
+  assert.equal(
+    classifyGitError("fatal: Unable to create '/repo/.git/index.lock': File exists."),
+    "lock",
+  );
+  assert.equal(classifyGitError("some unexpected failure"), null);
 });
 
 test("history filters trim empty values and preserve selected refs", () => {

@@ -11,6 +11,7 @@ import {
 import {
   canCommit,
   buildSelectedLinesPatch,
+  classifyGitError,
   gitOperationControls,
   gitMutationUsesInlineFeedback,
   gitOperationActions,
@@ -18,6 +19,7 @@ import {
   historyFilterArgs,
   parseUnifiedDiff,
   reconcileGitChangeKeys,
+  type GitErrorCode,
 } from "./git-model";
 
 import {
@@ -838,10 +840,32 @@ export function createWorkspacePanel(
     }
   }
 
-  function setOperation(message: string, show = true) {
+  function setOperation(message: string, show = true, detail = "") {
     operationEl.className = "ws-operation";
     operationEl.textContent = message;
     operationEl.classList.toggle("show", show && !!message);
+    if (detail) operationEl.title = detail;
+    else operationEl.removeAttribute("title");
+  }
+
+  const GIT_ERROR_KEYS: Record<GitErrorCode, string> = {
+    auth_failed: "workspace_git_error_auth_failed",
+    non_fast_forward: "workspace_git_error_non_fast_forward",
+    no_upstream: "workspace_git_error_no_upstream",
+    dirty_worktree: "workspace_git_error_dirty_worktree",
+    conflict: "workspace_git_error_conflict",
+    hook_failed: "workspace_git_error_hook_failed",
+    nothing_to_commit: "workspace_git_error_nothing_to_commit",
+    detached_head: "workspace_git_error_detached_head",
+    lock: "workspace_git_error_lock",
+  };
+
+  /** Turns raw git stderr into an actionable sentence, keeping the original
+   *  text available as the tooltip for anyone who needs the details. */
+  function gitErrorMessage(error: unknown): { text: string; detail: string } {
+    const detail = String(error);
+    const code = classifyGitError(detail);
+    return { text: code ? t(GIT_ERROR_KEYS[code]) : detail, detail };
   }
 
   function remoteOperationCommitCount(operation: "fetch" | "pull" | "push") {
@@ -910,7 +934,9 @@ export function createWorkspacePanel(
     progress.appendChild(bar);
     const log = document.createElement("pre");
     log.className = "ws-operation-log";
-    log.textContent = `${command}\n\n${normalizedGitOutput(output) || fallback}`;
+    const hint = state === "error" ? gitErrorMessage(output) : null;
+    const hintLine = hint && hint.text !== hint.detail ? `${hint.text}\n\n` : "";
+    log.textContent = `${command}\n\n${hintLine}${normalizedGitOutput(output) || fallback}`;
     operationEl.append(head, progress, log);
     log.scrollTop = log.scrollHeight;
   }
@@ -1022,7 +1048,8 @@ export function createWorkspacePanel(
       return true;
     } catch (error) {
       if (project === activeProject && projectRevision === revision) {
-        setOperation(String(error));
+        const message = gitErrorMessage(error);
+        setOperation(message.text, true, message.detail);
       }
       return false;
     } finally {

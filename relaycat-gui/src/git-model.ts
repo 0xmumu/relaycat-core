@@ -67,6 +67,53 @@ export function gitMutationUsesInlineFeedback(command: string): boolean {
   return new Set(["git_stage_paths", "git_unstage_paths", "git_apply_patch"]).has(command);
 }
 
+export type GitErrorCode =
+  | "auth_failed"
+  | "non_fast_forward"
+  | "no_upstream"
+  | "dirty_worktree"
+  | "conflict"
+  | "hook_failed"
+  | "nothing_to_commit"
+  | "detached_head"
+  | "lock";
+
+// Git runs with LC_ALL=C (see the Rust runner), so stderr is stable English
+// and these patterns are reliable regardless of the user's locale.
+const GIT_ERROR_PATTERNS: ReadonlyArray<readonly [GitErrorCode, RegExp]> = [
+  [
+    "auth_failed",
+    /authentication failed|could not read username|permission denied \(publickey\)|invalid username or password|terminal prompts disabled/i,
+  ],
+  [
+    "non_fast_forward",
+    /non-fast-forward|updates were rejected|fetch first|remote contains work/i,
+  ],
+  ["no_upstream", /has no upstream branch|no upstream configured/i],
+  [
+    "dirty_worktree",
+    /would be overwritten|please commit your changes or stash|your local changes/i,
+  ],
+  [
+    "conflict",
+    /automatic merge failed|fix conflicts|unmerged files|needs merge|cannot .* because you have unmerged|conflict \(|merge conflict/i,
+  ],
+  ["hook_failed", /hook declined|pre-commit|commit-msg|pre-push/i],
+  [
+    "nothing_to_commit",
+    /nothing to commit|no changes added to commit|nothing added to commit/i,
+  ],
+  ["detached_head", /not currently on a branch|detached head/i],
+  ["lock", /index\.lock|unable to create .*\.lock|another git process/i],
+];
+
+export function classifyGitError(message: string): GitErrorCode | null {
+  for (const [code, pattern] of GIT_ERROR_PATTERNS) {
+    if (pattern.test(message)) return code;
+  }
+  return null;
+}
+
 export function gitSyncButtonLabels(
   ahead: number,
   behind: number,

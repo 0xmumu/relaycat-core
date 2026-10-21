@@ -38,6 +38,10 @@ pub fn git_output_with_timeout(
         .current_dir(project)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "Never")
+        // Stable English diagnostics so the UI can classify failures. Content
+        // (paths, messages, diffs) is unaffected; only git's own output text
+        // is pinned.
+        .env("LC_ALL", "C")
         // The GUI has no terminal to host an editor. Commands that would open
         // one (for example `rebase --continue`) keep their existing message.
         .env("GIT_EDITOR", "true")
