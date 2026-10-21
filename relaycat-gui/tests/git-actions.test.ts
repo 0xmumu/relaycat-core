@@ -7,6 +7,7 @@ import {
   buildSelectedLinesPatch,
   changeActionPolicy,
   classifyGitError,
+  diffStatLabel,
   gitOperationActions,
   gitOperationControls,
   gitMutationUsesInlineFeedback,
@@ -80,6 +81,12 @@ test("operation banners only offer actions that can finish the operation", () =>
   assert.deepEqual(gitOperationActions("cherry_pick"), ["continue", "skip", "abort"]);
   assert.deepEqual(gitOperationActions("revert"), ["continue", "skip", "abort"]);
   assert.deepEqual(gitOperationActions("merge"), ["abort"]);
+});
+
+test("diff stats render as compact additions and deletions", () => {
+  assert.equal(diffStatLabel(undefined), "");
+  assert.equal(diffStatLabel({ added: 12, deleted: 3, binary: false }), "+12 −3");
+  assert.equal(diffStatLabel({ added: 0, deleted: 0, binary: true }), "bin");
 });
 
 test("classifies common git failures into actionable error codes", () => {

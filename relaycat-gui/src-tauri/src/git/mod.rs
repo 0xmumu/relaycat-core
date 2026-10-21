@@ -7,7 +7,7 @@ pub(crate) mod runner;
 mod status;
 
 pub use branch::GitRefDto;
-pub use status::RepositorySummaryDto;
+pub use status::{GitDiffStatDto, RepositorySummaryDto};
 
 #[tauri::command]
 pub async fn git_list_refs(project: String) -> Result<Vec<GitRefDto>, String> {
@@ -149,6 +149,13 @@ pub async fn git_repository_summary(project: String) -> Result<RepositorySummary
 #[tauri::command]
 pub async fn git_operation_action(project: String, action: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || status::operation_action(&project, &action))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_workspace_diff_stat(project: String) -> Result<GitDiffStatDto, String> {
+    tauri::async_runtime::spawn_blocking(move || status::diff_stat(&project))
         .await
         .map_err(|e| e.to_string())?
 }

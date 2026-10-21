@@ -114,6 +114,18 @@ export function classifyGitError(message: string): GitErrorCode | null {
   return null;
 }
 
+export interface GitDiffStat {
+  added: number;
+  deleted: number;
+  binary: boolean;
+}
+
+export function diffStatLabel(stat: GitDiffStat | undefined): string {
+  if (!stat) return "";
+  if (stat.binary) return "bin";
+  return `+${stat.added} −${stat.deleted}`;
+}
+
 export function gitSyncButtonLabels(
   ahead: number,
   behind: number,

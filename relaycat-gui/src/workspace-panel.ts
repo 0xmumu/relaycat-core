@@ -12,6 +12,7 @@ import {
   canCommit,
   buildSelectedLinesPatch,
   classifyGitError,
+  diffStatLabel,
   gitOperationControls,
   gitMutationUsesInlineFeedback,
   gitOperationActions,
@@ -19,6 +20,7 @@ import {
   historyFilterArgs,
   parseUnifiedDiff,
   reconcileGitChangeKeys,
+  type GitDiffStat,
   type GitErrorCode,
 } from "./git-model";
 
@@ -76,6 +78,11 @@ interface RepositorySummary {
   ahead: number;
   behind: number;
   operation: string | null;
+}
+
+interface GitDiffStatDto {
+  staged: Array<GitDiffStat & { path: string }>;
+  unstaged: Array<GitDiffStat & { path: string }>;
 }
 
 interface GitRef {
@@ -1200,7 +1207,10 @@ export function createWorkspacePanel(
     const path = document.createElement("span");
     path.className = "ws-git-path";
     path.textContent = change.path;
-    main.append(status, path);
+    const stat = document.createElement("span");
+    stat.className = "ws-git-stat";
+    stat.textContent = diffStatLabel(change.stat);
+    main.append(status, path, stat);
     main.onclick = () => void previewGitChange(change);
     const actions = document.createElement("span");
     actions.className = "ws-row-actions";
@@ -1319,6 +1329,8 @@ export function createWorkspacePanel(
         } else {
           const status = row.querySelector(".ws-git-status");
           if (status) status.textContent = item.status;
+          const stat = row.querySelector(".ws-git-stat");
+          if (stat) stat.textContent = diffStatLabel(item.stat);
           const main = row.querySelector(".ws-git-row-main") as HTMLButtonElement | null;
           if (main) main.onclick = () => void previewGitChange(item);
         }
@@ -1381,10 +1393,11 @@ export function createWorkspacePanel(
       gitMeta.textContent = "";
     }
     try {
-      const [status, summary, refs] = await Promise.all([
+      const [status, summary, refs, diffStat] = await Promise.all([
         invoke<GitStatus>("git_workspace_status", { project: activeProject }),
         invoke<RepositorySummary>("git_repository_summary", { project: activeProject }),
         invoke<GitRef[]>("git_list_refs", { project: activeProject }),
+        invoke<GitDiffStatDto>("git_workspace_diff_stat", { project: activeProject }),
       ]);
       if (
         project !== activeProject ||
@@ -1392,11 +1405,15 @@ export function createWorkspacePanel(
         sequence !== gitRefreshSequence
       ) return true;
       loadedViews.add("git");
+      const statSignature = [...diffStat.staged, ...diffStat.unstaged]
+        .map((entry) => `${entry.path}:${entry.added}:${entry.deleted}:${entry.binary ? 1 : 0}`)
+        .join("|");
       const fingerprint = JSON.stringify([
         gitStatusFingerprint(status),
         summary,
         refs,
         gitPathFilter,
+        statSignature,
       ]);
       if (fingerprint === lastGitFingerprint) return true;
       lastGitFingerprint = fingerprint;
@@ -1463,6 +1480,12 @@ export function createWorkspacePanel(
         staged: allSections.staged.filter(matchesGitPathFilter),
         unstaged: allSections.unstaged.filter(matchesGitPathFilter),
       };
+      const statByKey = new Map<string, GitDiffStat>();
+      for (const entry of diffStat.staged) statByKey.set(`staged:${entry.path}`, entry);
+      for (const entry of diffStat.unstaged) statByKey.set(`unstaged:${entry.path}`, entry);
+      for (const change of [...allSections.staged, ...allSections.unstaged]) {
+        change.stat = statByKey.get(gitChangeKey(change));
+      }
       stagedPaths = [...new Set(allSections.staged.map((change) => change.path))];
       unstagedPaths = [...new Set(allSections.unstaged.map((change) => change.path))];
       stagedCount = stagedPaths.length;

@@ -954,6 +954,14 @@ body.ws-preview-resizing .ws-preview-resizer::after {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.ws-git-stat {
+  margin-left: auto;
+  flex: none;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
 .ws-tree-name {
   min-width: 80px;
   flex: 1;

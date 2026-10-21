@@ -91,6 +91,7 @@ export interface GitDisplayChange {
   status: string;
   staged: boolean;
   conflicted: boolean;
+  stat?: { added: number; deleted: number; binary: boolean };
 }
 
 // Porcelain v1 XY pairs that mean the path is in an unresolved conflict.

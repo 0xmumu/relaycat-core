@@ -1517,6 +1517,7 @@ pub fn run() {
             git::git_reset_to,
             git::git_repository_summary,
             git::git_operation_action,
+            git::git_workspace_diff_stat,
             git::git_stage_paths,
             git::git_unstage_paths,
             workspace::list_workspace_entries,

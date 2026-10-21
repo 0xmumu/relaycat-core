@@ -81,6 +81,63 @@ pub(super) fn operation_action(project: &str, action: &str) -> Result<(), String
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GitDiffStatEntryDto {
+    pub path: String,
+    pub added: u32,
+    pub deleted: u32,
+    pub binary: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GitDiffStatDto {
+    pub staged: Vec<GitDiffStatEntryDto>,
+    pub unstaged: Vec<GitDiffStatEntryDto>,
+}
+
+/// Parses `git diff --numstat -z` output. Rename records (empty path followed
+/// by the old and new names) are skipped rather than risking a wrong path.
+fn parse_numstat_z(raw: &[u8]) -> Vec<GitDiffStatEntryDto> {
+    raw.split(|byte| *byte == 0)
+        .filter_map(|record| {
+            let mut fields = record.splitn(3, |byte| *byte == b'\t');
+            let added = fields.next()?;
+            let deleted = fields.next()?;
+            let path = fields.next()?;
+            if path.is_empty() {
+                return None;
+            }
+            let count = |value: &[u8]| {
+                std::str::from_utf8(value)
+                    .ok()
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .unwrap_or(0)
+            };
+            Some(GitDiffStatEntryDto {
+                path: String::from_utf8_lossy(path).into_owned(),
+                added: count(added),
+                deleted: count(deleted),
+                binary: added == b"-" || deleted == b"-",
+            })
+        })
+        .collect()
+}
+
+pub(super) fn diff_stat(project: &str) -> Result<GitDiffStatDto, String> {
+    let root = project_root(project)?;
+    let collect = |args: &[&str]| -> Result<Vec<GitDiffStatEntryDto>, String> {
+        let output = git_output(&root, args)?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        Ok(parse_numstat_z(&output.stdout))
+    };
+    Ok(GitDiffStatDto {
+        staged: collect(&["diff", "--numstat", "-z", "--cached", "--", "."])?,
+        unstaged: collect(&["diff", "--numstat", "-z", "--", "."])?,
+    })
+}
+
 pub(super) fn repository_summary(project: &str) -> Result<RepositorySummaryDto, String> {
     let root = project_root(project)?;
     if !git_output(&root, &["rev-parse", "--git-dir"])?
@@ -133,6 +190,16 @@ pub(super) fn repository_summary(project: &str) -> Result<RepositorySummaryDto, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_numstat_entries_and_flags_binary_files() {
+        let stats = parse_numstat_z(b"12\t3\tsrc/a.ts\0-\t-\tlogo.png\0");
+        assert_eq!(stats.len(), 2);
+        assert_eq!(stats[0].path, "src/a.ts");
+        assert_eq!((stats[0].added, stats[0].deleted), (12, 3));
+        assert!(!stats[0].binary);
+        assert!(stats[1].binary);
+    }
 
     #[test]
     fn parses_ahead_and_behind_counts() {
