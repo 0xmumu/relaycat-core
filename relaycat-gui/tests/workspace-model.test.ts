@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   groupGitChanges,
+  groupChangesByDirectory,
   isConflictedChange,
   isGitNotInstalledError,
   gitStatusFingerprint,
@@ -79,6 +80,29 @@ test("groups index and worktree changes into separate sections", () => {
       ["both.ts", "M"],
     ],
   );
+});
+
+test("groups changes by directory with aggregated diff stats", () => {
+  const groups = groupChangesByDirectory([
+    { path: "src/a.ts", status: "M", staged: false, conflicted: false, stat: { added: 3, deleted: 1, binary: false } },
+    { path: "src/ui/b.ts", status: "M", staged: false, conflicted: false, stat: { added: 2, deleted: 0, binary: false } },
+    { path: "src/ui/c.png", status: "A", staged: false, conflicted: false, stat: { added: 0, deleted: 0, binary: true } },
+    { path: "README.md", status: "M", staged: false, conflicted: false, stat: { added: 1, deleted: 1, binary: false } },
+    { path: "no-stat.ts", status: "M", staged: false, conflicted: false },
+  ]);
+
+  assert.deepEqual(
+    groups.map((group) => [group.dir, group.changes.map((change) => change.path)]),
+    [
+      ["", ["README.md", "no-stat.ts"]],
+      ["src", ["src/a.ts"]],
+      ["src/ui", ["src/ui/b.ts", "src/ui/c.png"]],
+    ],
+  );
+  assert.deepEqual(groups[1].stat, { added: 3, deleted: 1, binary: false });
+  assert.deepEqual(groups[2].stat, { added: 2, deleted: 0, binary: true });
+  assert.deepEqual(groups[0].stat, { added: 1, deleted: 1, binary: false });
+  assert.deepEqual(groupChangesByDirectory([]), []);
 });
 
 test("conflicted paths are split into their own group", () => {

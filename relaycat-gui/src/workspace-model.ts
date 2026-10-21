@@ -160,6 +160,48 @@ export function groupGitChanges(changes: GitChange[]): {
   return { conflicted, staged, unstaged };
 }
 
+export interface GitChangeGroup {
+  /** Directory of the changed files; "" means files directly in the root. */
+  dir: string;
+  changes: GitDisplayChange[];
+  stat: { added: number; deleted: number; binary: boolean };
+}
+
+/**
+ * Groups a section of the change list by the directory that holds each file,
+ * so a large change set can be scanned directory by directory. Root files come
+ * first, the remaining directories are ordered alphabetically.
+ */
+export function groupChangesByDirectory(changes: GitDisplayChange[]): GitChangeGroup[] {
+  const buckets = new Map<string, GitDisplayChange[]>();
+  for (const change of changes) {
+    const slash = change.path.lastIndexOf("/");
+    const dir = slash === -1 ? "" : change.path.slice(0, slash);
+    const bucket = buckets.get(dir);
+    if (bucket) bucket.push(change);
+    else buckets.set(dir, [change]);
+  }
+  return [...buckets.entries()]
+    .sort(([left], [right]) => {
+      if (left === right) return 0;
+      if (left === "") return -1;
+      if (right === "") return 1;
+      return left.localeCompare(right);
+    })
+    .map(([dir, items]) => {
+      let added = 0;
+      let deleted = 0;
+      let binary = false;
+      for (const item of items) {
+        if (!item.stat) continue;
+        binary = binary || item.stat.binary;
+        added += item.stat.added;
+        deleted += item.stat.deleted;
+      }
+      return { dir, changes: items, stat: { added, deleted, binary } };
+    });
+}
+
 export function workspacePanelWidth(width: number): number {
   const finiteWidth = Number.isFinite(width) ? Math.round(width) : 360;
   return Math.max(280, Math.min(720, finiteWidth));

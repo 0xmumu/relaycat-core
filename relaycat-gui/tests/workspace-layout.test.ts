@@ -180,6 +180,13 @@ test("switching projects drops stale branch and ref options", () => {
   assert.match(notRepo, /branchSelect\.innerHTML = ""/);
 });
 
+test("change list groups files by directory and remembers collapsed folders", () => {
+  assert.match(workspacePanel, /groupChangesByDirectory\(items\)/);
+  assert.match(workspacePanel, /showDirectories = groups\.length > 1/);
+  assert.match(workspacePanel, /collapsedGitDirs\.has\(`\$\{kind\}:\$\{group\.dir\}`\)/);
+  assert.match(css, /\.ws-git-dir\.collapsed \.ws-git-dir-chevron\s*{[^}]*rotate\(-90deg\)/s);
+});
+
 test("Shell mode owns the workspace body without showing file or Git chrome", () => {
   assert.match(css, /\.workspace-panel\.shell-mode \.embedded-shell-panel\s*{[^}]*display:\s*flex;/s);
   assert.match(css, /\.workspace-panel\.shell-mode \.ws-main\s*{[^}]*display:\s*none;/s);

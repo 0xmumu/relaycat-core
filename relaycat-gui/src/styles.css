@@ -1194,6 +1194,52 @@ body.ws-preview-resizing .ws-preview-resizer::after {
 .ws-git-row.ws-row-enter {
   animation: ws-row-enter 140ms ease-out;
 }
+.ws-git-dir {
+  width: 100%;
+  min-width: max-content;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.ws-git-dir:hover {
+  background: var(--hover);
+}
+.ws-git-dir-chevron {
+  width: 10px;
+  flex: none;
+  color: var(--dim);
+  transition: transform 120ms ease;
+}
+.ws-git-dir.collapsed .ws-git-dir-chevron {
+  transform: rotate(-90deg);
+}
+.ws-git-dir-path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-git-dir-count {
+  flex: none;
+  color: var(--dim);
+}
+.ws-git-dir .ws-git-stat {
+  margin-left: 0;
+}
+.ws-git-row.in-group {
+  padding-left: 24px;
+}
 .ws-git-row.ws-row-leave {
   pointer-events: none;
   animation: ws-row-leave 140ms ease-in forwards;

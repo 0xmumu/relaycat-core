@@ -19,12 +19,12 @@ import {
   gitSyncButtonLabels,
   historyFilterArgs,
   parseUnifiedDiff,
-  reconcileGitChangeKeys,
   type GitDiffStat,
   type GitErrorCode,
 } from "./git-model";
 
 import {
+  groupChangesByDirectory,
   groupGitChanges,
   gitHistoryPage,
   gitStatusFingerprint,
@@ -176,6 +176,12 @@ export function createWorkspacePanel(
   let repositoryAhead = 0;
   let repositoryBehind = 0;
   let gitOperationRunning = false;
+  let lastGitSections: {
+    conflicted: GitDisplayChange[];
+    staged: GitDisplayChange[];
+    unstaged: GitDisplayChange[];
+  } = { conflicted: [], staged: [], unstaged: [] };
+  const collapsedGitDirs = new Set<string>();
   let commitMenu: HTMLElement | null = null;
   let fileMenu: HTMLElement | null = null;
   let gitPathFilter: { path: string; isDir: boolean } | null = null;
@@ -1273,69 +1279,108 @@ export function createWorkspacePanel(
     return section;
   }
 
+  function buildGitDirRow(
+    kind: "conflicted" | "staged" | "unstaged",
+    group: { dir: string; changes: GitDisplayChange[]; stat: GitDiffStat },
+  ) {
+    const key = `${kind}:${group.dir}`;
+    const collapsed = collapsedGitDirs.has(key);
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `ws-git-dir${collapsed ? " collapsed" : ""}`;
+    row.dataset.gitDir = key;
+    const chevron = document.createElement("span");
+    chevron.className = "ws-git-dir-chevron";
+    chevron.textContent = "▾";
+    const path = document.createElement("span");
+    path.className = "ws-git-dir-path";
+    path.textContent = group.dir || t("workspace_git_root");
+    path.title = group.dir || t("workspace_git_root");
+    const count = document.createElement("span");
+    count.className = "ws-git-dir-count";
+    count.textContent = t("workspace_git_dir_count", group.changes.length);
+    const stat = document.createElement("span");
+    stat.className = "ws-git-stat";
+    stat.textContent = diffStatLabel(group.stat);
+    row.append(chevron, path, count, stat);
+    row.onclick = () => {
+      if (collapsedGitDirs.has(key)) collapsedGitDirs.delete(key);
+      else collapsedGitDirs.add(key);
+      renderGitSections();
+    };
+    return row;
+  }
+
+  function renderGitSections() {
+    reconcileGitSections(
+      lastGitSections.conflicted,
+      lastGitSections.staged,
+      lastGitSections.unstaged,
+    );
+  }
+
   function reconcileGitSections(
     conflicted: GitDisplayChange[],
     staged: GitDisplayChange[],
     unstaged: GitDisplayChange[],
   ) {
+    lastGitSections = { conflicted, staged, unstaged };
     gitList.querySelector(".ws-state")?.remove();
-    const nextChanges = [...conflicted, ...staged, ...unstaged];
-    const nextByKey = new Map(nextChanges.map((change) => [gitChangeKey(change), change]));
     const existingRows = Array.from(
       gitList.querySelectorAll<HTMLElement>(".ws-git-row[data-change-key]"),
     );
     const existingByKey = new Map(
       existingRows.map((row) => [row.dataset.changeKey as string, row]),
     );
-    const changes = reconcileGitChangeKeys(
-      [...existingByKey.keys()],
-      [...nextByKey.keys()],
-    );
-
-    for (const key of changes.removed) {
-      const row = existingByKey.get(key);
-      if (!row) continue;
-      row.classList.add("ws-row-leave");
-      window.setTimeout(() => row.remove(), 140);
-    }
 
     const conflictedSection = gitSection("conflicted", t("workspace_conflicts"));
     const stagedSection = gitSection("staged", t("workspace_staged"));
     const unstagedSection = gitSection("unstaged", t("workspace_unstaged"));
     gitList.append(conflictedSection, stagedSection, unstagedSection);
-    for (const [section, items] of [
-      [conflictedSection, conflicted],
-      [stagedSection, staged],
-      [unstagedSection, unstaged],
+    for (const [kind, section, items] of [
+      ["conflicted", conflictedSection, conflicted],
+      ["staged", stagedSection, staged],
+      ["unstaged", unstagedSection, unstaged],
     ] as const) {
       const heading = section.querySelector(".ws-git-section-title") as HTMLElement;
       const rows = section.querySelector(".ws-git-section-rows") as HTMLElement;
       heading.textContent = `${heading.dataset.title} (${items.length})`;
       section.hidden = items.length === 0;
-      for (const item of items) {
-        const key = gitChangeKey(item);
-        let row = existingByKey.get(key);
-        // A path can turn from a normal change into a conflict (and back)
-        // without changing its key, so the row is rebuilt when its shape no
-        // longer matches.
-        const staleShape = !!row && row.classList.contains("conflicted") !== item.conflicted;
-        if (!row || staleShape) {
-          if (row) row.remove();
-          row = buildGitRow(item);
-          row.classList.add("ws-row-enter");
-          row.addEventListener("animationend", () => row?.classList.remove("ws-row-enter"), {
-            once: true,
-          });
-        } else {
-          const status = row.querySelector(".ws-git-status");
-          if (status) status.textContent = item.status;
-          const stat = row.querySelector(".ws-git-stat");
-          if (stat) stat.textContent = diffStatLabel(item.stat);
-          const main = row.querySelector(".ws-git-row-main") as HTMLButtonElement | null;
-          if (main) main.onclick = () => void previewGitChange(item);
+      const groups = groupChangesByDirectory(items);
+      // A single group that only holds root files needs no directory header:
+      // the section title already says everything there is to say.
+      const showDirectories = groups.length > 1 || (groups[0]?.dir ?? "") !== "";
+      const nodes: HTMLElement[] = [];
+      for (const group of groups) {
+        if (showDirectories) nodes.push(buildGitDirRow(kind, group));
+        if (showDirectories && collapsedGitDirs.has(`${kind}:${group.dir}`)) continue;
+        for (const item of group.changes) {
+          const key = gitChangeKey(item);
+          let row = existingByKey.get(key);
+          // A path can turn from a normal change into a conflict (and back)
+          // without changing its key, so the row is rebuilt when its shape no
+          // longer matches.
+          const staleShape = !!row && row.classList.contains("conflicted") !== item.conflicted;
+          if (!row || staleShape) {
+            if (row) row.remove();
+            row = buildGitRow(item);
+            row.classList.add("ws-row-enter");
+            row.addEventListener("animationend", () => row?.classList.remove("ws-row-enter"), {
+              once: true,
+            });
+          } else {
+            const status = row.querySelector(".ws-git-status");
+            if (status) status.textContent = item.status;
+            const stat = row.querySelector(".ws-git-stat");
+            if (stat) stat.textContent = diffStatLabel(item.stat);
+            const main = row.querySelector(".ws-git-row-main") as HTMLButtonElement | null;
+            if (main) main.onclick = () => void previewGitChange(item);
+          }
+          row.classList.toggle("in-group", showDirectories);
+          nodes.push(row);
         }
-        rows.appendChild(row);
       }
+      rows.replaceChildren(...nodes);
     }
   }
 
@@ -2122,6 +2167,8 @@ export function createWorkspacePanel(
       lastGitFingerprint = null;
       gitRefreshSequence += 1;
       gitPathFilter = null;
+      collapsedGitDirs.clear();
+      lastGitSections = { conflicted: [], staged: [], unstaged: [] };
       renderGitFilter();
       fileSearch.value = "";
       fileSearchSequence += 1;
