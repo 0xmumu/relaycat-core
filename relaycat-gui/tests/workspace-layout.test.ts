@@ -148,6 +148,14 @@ test("commit helpers recall recent messages and warn on long subjects", () => {
   assert.match(workspacePanel, /ArrowUp/);
 });
 
+test("the file tree can jump to the changes of one path", () => {
+  assert.match(html, /id="workspace-git-filter"/);
+  assert.match(workspacePanel, /openFileMenu/);
+  assert.match(workspacePanel, /gitPathFilter/);
+  assert.match(workspacePanel, /workspace_show_file_changes/);
+  assert.match(workspacePanel, /allSections\.staged/);
+});
+
 test("switching projects drops stale branch and ref options", () => {
   const setProject = workspacePanel.match(
     /setProject\(nextProject\)[\s\S]*?if \(!project\) setOpened\(false\);/,

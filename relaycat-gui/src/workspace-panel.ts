@@ -114,6 +114,9 @@ export function createWorkspacePanel(
   const gitBannerText = document.querySelector("#workspace-git-banner-text") as HTMLElement;
   const gitBannerActions = document.querySelector("#workspace-git-banner-actions") as HTMLElement;
   const gitList = document.querySelector("#workspace-git-list") as HTMLElement;
+  const gitFilter = document.querySelector("#workspace-git-filter") as HTMLElement;
+  const gitFilterText = document.querySelector("#workspace-git-filter-text") as HTMLElement;
+  const gitFilterClear = document.querySelector("#workspace-git-filter-clear") as HTMLButtonElement;
   const operationEl = document.querySelector("#workspace-operation") as HTMLElement;
   const branchSelect = document.querySelector("#workspace-branch") as HTMLSelectElement;
   const fetchBtn = document.querySelector("#workspace-fetch") as HTMLButtonElement;
@@ -165,6 +168,8 @@ export function createWorkspacePanel(
   let repositoryBehind = 0;
   let gitOperationRunning = false;
   let commitMenu: HTMLElement | null = null;
+  let fileMenu: HTMLElement | null = null;
+  let gitPathFilter: { path: string; isDir: boolean } | null = null;
   const RECENT_COMMIT_STORAGE_KEY = "relaycat.workspaceCommitHistory";
   const RECENT_COMMIT_LIMIT = 5;
   const COMMIT_SUBJECT_LIMIT = 50;
@@ -671,6 +676,10 @@ export function createWorkspacePanel(
       } else {
         row.onclick = () => void previewFile(entry.relative_path);
       }
+      row.oncontextmenu = (event) => {
+        event.preventDefault();
+        openFileMenu(entry, event.clientX, event.clientY);
+      };
       container.appendChild(node);
     }
   }
@@ -1292,7 +1301,12 @@ export function createWorkspacePanel(
         sequence !== gitRefreshSequence
       ) return true;
       loadedViews.add("git");
-      const fingerprint = JSON.stringify([gitStatusFingerprint(status), summary, refs]);
+      const fingerprint = JSON.stringify([
+        gitStatusFingerprint(status),
+        summary,
+        refs,
+        gitPathFilter,
+      ]);
       if (fingerprint === lastGitFingerprint) return true;
       lastGitFingerprint = fingerprint;
       if (!status.is_repo) {
@@ -1349,9 +1363,17 @@ export function createWorkspacePanel(
           historyRef.appendChild(option);
         }
       }
-      const sections = groupGitChanges(status.changes);
-      stagedPaths = [...new Set(sections.staged.map((change) => change.path))];
-      unstagedPaths = [...new Set(sections.unstaged.map((change) => change.path))];
+      const allSections = groupGitChanges(status.changes);
+      // The path filter only narrows what the list shows: staging and the
+      // commit bar still reflect the whole index, so filtered-out staged work
+      // can never silently disable the commit button.
+      const sections = {
+        conflicted: allSections.conflicted.filter(matchesGitPathFilter),
+        staged: allSections.staged.filter(matchesGitPathFilter),
+        unstaged: allSections.unstaged.filter(matchesGitPathFilter),
+      };
+      stagedPaths = [...new Set(allSections.staged.map((change) => change.path))];
+      unstagedPaths = [...new Set(allSections.unstaged.map((change) => change.path))];
       stagedCount = stagedPaths.length;
       updateGitControls();
       if (
@@ -1359,7 +1381,10 @@ export function createWorkspacePanel(
         sections.staged.length === 0 &&
         sections.unstaged.length === 0
       ) {
-        renderState(gitList, t("workspace_no_changes"));
+        renderState(
+          gitList,
+          t(gitPathFilter ? "workspace_filter_no_changes" : "workspace_no_changes"),
+        );
         return true;
       }
       reconcileGitSections(sections.conflicted, sections.staged, sections.unstaged);
@@ -1472,6 +1497,54 @@ export function createWorkspacePanel(
     }
     document.body.appendChild(menu);
     commitMenu = menu;
+  }
+
+  function closeFileMenu() {
+    fileMenu?.remove();
+    fileMenu = null;
+  }
+
+  function matchesGitPathFilter(change: { path: string }): boolean {
+    if (!gitPathFilter) return true;
+    return gitPathFilter.isDir
+      ? change.path.startsWith(`${gitPathFilter.path}/`)
+      : change.path === gitPathFilter.path;
+  }
+
+  function openFileMenu(entry: WorkspaceEntry, x: number, y: number) {
+    closeFileMenu();
+    const menu = document.createElement("div");
+    menu.className = "ws-commit-menu";
+    menu.style.left = `${Math.min(x, window.innerWidth - 200)}px`;
+    menu.style.top = `${Math.min(y, window.innerHeight - 80)}px`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = t(
+      entry.is_dir ? "workspace_show_dir_changes" : "workspace_show_file_changes",
+    );
+    button.onclick = () => {
+      closeFileMenu();
+      gitPathFilter = { path: entry.relative_path, isDir: entry.is_dir };
+      renderGitFilter();
+      setMode("git");
+      void refreshGit(true);
+    };
+    menu.appendChild(button);
+    document.body.appendChild(menu);
+    fileMenu = menu;
+  }
+
+  function renderGitFilter() {
+    gitFilter.hidden = !gitPathFilter;
+    if (!gitPathFilter) {
+      gitFilterText.textContent = "";
+      return;
+    }
+    gitFilterText.textContent = t(
+      gitPathFilter.isDir ? "workspace_filter_dir" : "workspace_filter_file",
+      gitPathFilter.path,
+    );
+    gitFilterText.title = gitPathFilter.path;
   }
 
   function appendHistoryRows(commits: GitCommit[]) {
@@ -1812,6 +1885,11 @@ export function createWorkspacePanel(
     if (recentCommitMessages.length === 0) return;
     commitRecentList.hidden = !commitRecentList.hidden;
   };
+  gitFilterClear.onclick = () => {
+    gitPathFilter = null;
+    renderGitFilter();
+    void refreshGit(true);
+  };
   amendInput.onchange = updateGitControls;
   historyFilterBtn.onclick = () => void refreshHistory(true);
   historyQuery.onkeydown = (event) => {
@@ -1823,6 +1901,7 @@ export function createWorkspacePanel(
   document.addEventListener("pointerdown", (event) => {
     if (commitMenu && !commitMenu.contains(event.target as Node)) closeCommitMenu();
     const target = event.target as Node;
+    if (fileMenu && !fileMenu.contains(target)) closeFileMenu();
     if (
       !commitRecentList.hidden &&
       !commitRecentList.contains(target) &&
@@ -1904,6 +1983,8 @@ export function createWorkspacePanel(
       clearDirectoryObservers();
       lastGitFingerprint = null;
       gitRefreshSequence += 1;
+      gitPathFilter = null;
+      renderGitFilter();
       loadedViews.clear();
       for (const key of Object.keys(previewRestore)) {
         delete previewRestore[key as WorkspaceMode];

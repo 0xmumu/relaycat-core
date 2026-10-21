@@ -1188,6 +1188,45 @@ body.ws-preview-resizing .ws-preview-resizer::after {
 .ws-row-action.danger {
   color: var(--red);
 }
+.ws-git-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px 4px;
+  padding: 4px 6px 4px 8px;
+  border-radius: 5px;
+  background: var(--hover);
+  color: var(--dim);
+  font-size: 11px;
+}
+.ws-git-filter[hidden] {
+  display: none;
+}
+.ws-git-filter-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+.ws-git-filter-clear {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.ws-git-filter-clear:hover {
+  color: var(--text);
+  background: var(--hover-strong);
+}
 .ws-commit-bar {
   position: relative;
   flex: none;
