@@ -17,6 +17,16 @@ test("git changes starts with the preview collapsed", () => {
   assert.equal(workspacePreviewStartsCollapsed("history"), false);
 });
 
+test("switching views restores the previous view instead of rebuilding it", () => {
+  const setMode = workspacePanel.match(
+    /function setMode\(next: WorkspaceMode\)[\s\S]*?\n  }/,
+  )?.[0] ?? "";
+  assert.match(setMode, /previewRestore\[mode\]/);
+  assert.match(setMode, /loadedViews\.has\(mode\)/);
+  assert.match(setMode, /previewCollapseFor\(collapsedByMode\[mode\], mode\)/);
+  assert.doesNotMatch(setMode, /^\s+void refresh\(\);$/m);
+});
+
 test("git history scrolls long rows without stretching its filters", () => {
   assert.match(
     css,

@@ -30,6 +30,7 @@ import {
   isGitNotInstalledError,
   isMarkdownPreviewPath,
   previewLanguage,
+  previewCollapseFor,
   projectBasename,
   storedWorkspacePanelWidth,
   tokenizeDiffLine,
@@ -162,6 +163,11 @@ export function createWorkspacePanel(
   let stagedPaths: string[] = [];
   let unstagedPaths: string[] = [];
   let previewCollapsed = workspacePreviewStartsCollapsed(mode);
+  // Per-view UI state, so switching views keeps the user's place instead of
+  // rebuilding the tree, the history list and the preview from scratch.
+  const collapsedByMode: Partial<Record<WorkspaceMode, boolean>> = {};
+  const previewRestore: Partial<Record<WorkspaceMode, () => void | Promise<void>>> = {};
+  const loadedViews = new Set<WorkspaceMode>();
   let markdownDisplayMode: "preview" | "source" = "preview";
   let markdownSource: string | null = null;
   let markdownSourcePath = "";
@@ -542,11 +548,18 @@ export function createWorkspacePanel(
     renderState(container, t("workspace_load_failed", String(error)));
   }
 
-  async function previewFile(relativePath: string, title = relativePath) {
+  async function previewFile(
+    relativePath: string,
+    title = relativePath,
+    targetMode: WorkspaceMode = "files",
+    restore = false,
+  ) {
     if (!project) return;
     const activeProject = project;
     const revision = projectRevision;
-    showPreviewLoading(title, relativePath);
+    previewRestore[targetMode] = () =>
+      previewFile(relativePath, title, targetMode, true);
+    if (!restore) showPreviewLoading(title, relativePath);
     try {
       const preview = await invoke<FilePreview>("read_workspace_file", {
         project: activeProject,
@@ -724,18 +737,26 @@ export function createWorkspacePanel(
     const revision = projectRevision;
     clearDirectoryObservers();
     renderState(fileTree, t("workspace_loading"));
-    return loadDirectoryPage("", fileTree, 0, activeProject, revision, 0, false);
+    const ok = await loadDirectoryPage("", fileTree, 0, activeProject, revision, 0, false);
+    if (ok) loadedViews.add("files");
+    return ok;
   }
 
-  async function previewGitChange(change: GitDisplayChange) {
+  async function previewGitChange(change: GitDisplayChange, restore = false) {
     if (!project) return;
+    previewRestore.git = () => previewGitChange(change, true);
     if (!change.staged && change.status === "?") {
-      await previewFile(change.path, `${change.path} · ${t("workspace_untracked_preview")}`);
+      await previewFile(
+        change.path,
+        `${change.path} · ${t("workspace_untracked_preview")}`,
+        "git",
+        restore,
+      );
       return;
     }
     const activeProject = project;
     const revision = projectRevision;
-    showPreviewLoading(change.path);
+    if (!restore) showPreviewLoading(change.path);
     try {
       const preview = await invoke<FilePreview>("git_workspace_diff", {
         project: activeProject,
@@ -1109,6 +1130,7 @@ export function createWorkspacePanel(
         projectRevision !== revision ||
         sequence !== gitRefreshSequence
       ) return true;
+      loadedViews.add("git");
       const fingerprint = JSON.stringify([gitStatusFingerprint(status), summary, refs]);
       if (fingerprint === lastGitFingerprint) return true;
       lastGitFingerprint = fingerprint;
@@ -1194,12 +1216,13 @@ export function createWorkspacePanel(
     }
   }
 
-  async function previewCommit(commit: GitCommit) {
+  async function previewCommit(commit: GitCommit, restore = false) {
     if (!project) return;
     const activeProject = project;
     const revision = projectRevision;
     const title = t("workspace_commit_diff", commit.short_hash);
-    showPreviewLoading(title);
+    previewRestore.history = () => previewCommit(commit, true);
+    if (!restore) showPreviewLoading(title);
     try {
       const preview = await invoke<FilePreview>("git_workspace_commit_diff", {
         project: activeProject,
@@ -1358,6 +1381,7 @@ export function createWorkspacePanel(
         ) return true;
         if (!status.is_repo) {
           historyHasMore = false;
+          loadedViews.add("history");
           renderState(historyList, t("workspace_not_repo"));
           return true;
         }
@@ -1374,6 +1398,7 @@ export function createWorkspacePanel(
         projectRevision !== revision ||
         sequence !== historyRequestSequence
       ) return true;
+      loadedViews.add("history");
       if (reset) historyList.innerHTML = "";
       historyCommits.push(...commits);
       historyHasMore = commits.length === page.limit;
@@ -1456,6 +1481,9 @@ export function createWorkspacePanel(
   }
 
   function setMode(next: WorkspaceMode) {
+    // Clicking the tab you are already on must not refetch or re-render.
+    if (opened && mode === next) return;
+    if (mode !== next) collapsedByMode[mode] = previewCollapsed;
     mode = next;
     const filesActive = mode === "files";
     const gitActive = mode === "git";
@@ -1477,11 +1505,17 @@ export function createWorkspacePanel(
     if (shellActive) {
       stopRefreshTimer();
     } else {
-      clearPreview();
-      setPreviewCollapsed(mode === "shell" ? false : workspacePreviewStartsCollapsed(mode));
+      // Restore the preview this view had, so switching tabs does not throw
+      // away what the user was reading. Only the first visit clears it.
+      const restore = previewRestore[mode];
+      if (restore) void restore();
+      else clearPreview();
+      setPreviewCollapsed(previewCollapseFor(collapsedByMode[mode], mode));
       if (opened) {
         startRefreshTimer();
-        void refresh();
+        // The DOM of an already loaded view is left untouched: stale views are
+        // refreshed by the timer or the refresh button, not by every switch.
+        if (!loadedViews.has(mode)) void refresh();
       }
     }
   }
@@ -1686,6 +1720,13 @@ export function createWorkspacePanel(
       clearDirectoryObservers();
       lastGitFingerprint = null;
       gitRefreshSequence += 1;
+      loadedViews.clear();
+      for (const key of Object.keys(previewRestore)) {
+        delete previewRestore[key as WorkspaceMode];
+      }
+      for (const key of Object.keys(collapsedByMode)) {
+        delete collapsedByMode[key as WorkspaceMode];
+      }
       historyCommits = [];
       historyRequestSequence += 1;
       historyLoading = false;

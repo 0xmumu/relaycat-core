@@ -98,6 +98,18 @@ export function workspacePreviewStartsCollapsed(
   return mode === "git";
 }
 
+/**
+ * Keeps the collapse choice a user made in a view when they switch back to it,
+ * instead of re-applying the per-mode default on every switch.
+ */
+export function previewCollapseFor(
+  remembered: boolean | undefined,
+  mode: "files" | "git" | "history" | "shell",
+): boolean {
+  if (remembered !== undefined) return remembered;
+  return mode === "shell" ? false : workspacePreviewStartsCollapsed(mode);
+}
+
 export function groupGitChanges(changes: GitChange[]): {
   staged: GitDisplayChange[];
   unstaged: GitDisplayChange[];

@@ -14,6 +14,7 @@ import {
   MARKDOWN_RENDER_LIMIT,
   formatWorkspaceEntrySize,
   formatWorkspaceModifiedTime,
+  previewCollapseFor,
   previewLanguage,
   projectBasename,
   storedWorkspacePanelWidth,
@@ -91,6 +92,14 @@ test("uses the default width when no saved preference exists", () => {
   assert.equal(storedWorkspacePanelWidth(null), 360);
   assert.equal(storedWorkspacePanelWidth(null, 440), 440);
   assert.equal(storedWorkspacePanelWidth("410"), 410);
+});
+
+test("a remembered collapse choice wins over the per-view default", () => {
+  assert.equal(previewCollapseFor(undefined, "git"), true);
+  assert.equal(previewCollapseFor(undefined, "files"), false);
+  assert.equal(previewCollapseFor(undefined, "shell"), false);
+  assert.equal(previewCollapseFor(false, "git"), false);
+  assert.equal(previewCollapseFor(true, "files"), true);
 });
 
 test("extracts a project name from Unix and Windows paths", () => {
