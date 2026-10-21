@@ -415,6 +415,7 @@ button {
 .term-toolbtn {
   width: 28px;
   height: 28px;
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -435,6 +436,69 @@ button {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+.term-tool-label {
+  position: absolute;
+  right: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--elevated);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 10.5px;
+  font-weight: 400;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.term-toolbtn:hover .term-tool-label,
+.term-toolbtn:focus-visible .term-tool-label {
+  opacity: 1;
+}
+/* One-time callout that explains what the three rail buttons open. */
+.term-toolrail-hint {
+  position: absolute;
+  right: calc(100% + 10px);
+  top: 0;
+  width: 178px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 9px;
+  border: 1px solid var(--accent-ring);
+  border-radius: 8px;
+  background: var(--elevated);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: left;
+  box-shadow: var(--shadow-pop);
+}
+.term-toolrail-hint span {
+  flex: 1;
+  min-width: 0;
+}
+.term-toolrail-hint-close {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.term-toolrail-hint-close:hover {
+  background: var(--hover-strong);
+  color: var(--text);
 }
 .term-toolbtn:hover,
 .term-toolbtn.active {

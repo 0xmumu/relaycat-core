@@ -1527,7 +1527,35 @@ function termToolButton(labelKey: string, svg: string): HTMLButtonElement {
   button.dataset.i18nTitle = labelKey;
   button.setAttribute("aria-label", t(labelKey));
   button.innerHTML = svg;
+  // Icon-only buttons in a 28px rail are hard to identify on first sight, so
+  // hovering expands a text label next to the icon.
+  const label = el("span", "term-tool-label");
+  label.textContent = t(labelKey);
+  button.appendChild(label);
   return button;
+}
+
+const RAIL_HINT_KEY = "relaycat.workspaceRailHint";
+
+// One-time callout next to the rail: without it the three icon buttons read as
+// decoration, and new users never find the file tree / Git panel.
+function showRailHint(rail: HTMLElement) {
+  if (localStorage.getItem(RAIL_HINT_KEY)) return;
+  localStorage.setItem(RAIL_HINT_KEY, "1");
+  const hint = el("div", "term-toolrail-hint");
+  const text = el("span");
+  text.textContent = t("workspace_rail_hint");
+  const close = el("button", "term-toolrail-hint-close") as HTMLButtonElement;
+  close.type = "button";
+  close.textContent = "×";
+  close.onclick = (event) => {
+    event.stopPropagation();
+    hint.remove();
+  };
+  hint.append(text, close);
+  rail.appendChild(hint);
+  rail.addEventListener("click", () => hint.remove(), { capture: true, once: true });
+  window.setTimeout(() => hint.remove(), 9000);
 }
 
 function appendTermToolRail(tab: Tab) {
@@ -1568,6 +1596,7 @@ function appendTermToolRail(tab: Tab) {
   };
   rail.append(files, git, shell);
   tab.pane.appendChild(rail);
+  showRailHint(rail);
 }
 
 function renderStatusbar() {

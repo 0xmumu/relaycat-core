@@ -10,6 +10,7 @@ const workspacePanel = readFileSync(
   new URL("../src/workspace-panel.ts", import.meta.url),
   "utf8",
 );
+const mainSource = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 
 test("git changes starts with the preview collapsed", () => {
   assert.equal(workspacePreviewStartsCollapsed("git"), true);
@@ -50,6 +51,14 @@ test("preview offers line numbers, a wrap toggle and a jump to the file", () => 
   assert.match(workspacePanel, /workspace_view_file/);
   assert.match(css, /\.ws-preview-code\.wrap\s*{[^}]*white-space:\s*pre-wrap;/s);
   assert.match(css, /\.ws-preview-code\.show-line-numbers \.ws-code-line::before\s*{[^}]*counter\(ws-line\)/s);
+});
+
+test("the workspace rail labels itself and hints once", () => {
+  assert.match(mainSource, /term-tool-label/);
+  assert.match(mainSource, /workspace_rail_hint/);
+  assert.match(mainSource, /relaycat\.workspaceRailHint/);
+  assert.match(css, /\.term-toolbtn:hover \.term-tool-label/);
+  assert.match(css, /\.term-toolrail-hint\s*{[^}]*position:\s*absolute;/s);
 });
 
 test("destructive prompts state the concrete consequences", () => {
