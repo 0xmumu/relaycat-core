@@ -185,6 +185,7 @@ test("developer preview switches locally while JSON stays in source mode", () =>
   assert.doesNotMatch(workspacePanelSource, /parseJsonLinesPreview/);
   assert.match(workspacePanelSource, /parseDelimitedPreview/);
   assert.match(workspacePanelSource, /sanitizeSvgPreview/);
+  assert.match(workspacePanelSource, /purifySvgMarkup\(/);
   assert.match(workspacePanelSource, /setDeveloperDisplayMode/);
   const setter = workspacePanelSource.match(
     /function setDeveloperDisplayMode[\s\S]*?\n  }/,

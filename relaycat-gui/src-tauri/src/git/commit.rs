@@ -105,28 +105,24 @@ fn create_commit_message_file(message: &str) -> Result<PathBuf, String> {
     Err("could not create a temporary commit message file".into())
 }
 
+// Commit messages can contain sensitive context; keep the temp file readable
+// by its owner only where the platform supports it.
+#[cfg(unix)]
 fn open_private_file(path: &Path) -> std::io::Result<fs::File> {
-    // Commit messages can contain sensitive context; keep the temp file
-    // readable by its owner only where the platform supports it.
-    let result = {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(path)
-        }
-        #[cfg(not(unix))]
-        {
-            fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(path)
-        }
-    };
-    result
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_private_file(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
 }
 
 #[cfg(test)]
