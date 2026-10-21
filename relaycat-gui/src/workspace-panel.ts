@@ -1120,6 +1120,8 @@ export function createWorkspacePanel(
         repositoryAhead = 0;
         repositoryBehind = 0;
         gitMeta.textContent = "";
+        branchSelect.innerHTML = "";
+        historyRef.innerHTML = `<option value="">${t("workspace_all_refs")}</option>`;
         const labels = gitSyncButtonLabels(0, 0, t("workspace_pull"), t("workspace_push"));
         pullBtn.textContent = labels.pull;
         pushBtn.textContent = labels.push;
@@ -1708,6 +1710,8 @@ export function createWorkspacePanel(
       renderState(gitList, project ? t("workspace_loading") : "");
       renderState(historyList, project ? t("workspace_loading") : "");
       gitMeta.textContent = "";
+      branchSelect.innerHTML = "";
+      historyRef.innerHTML = `<option value="">${t("workspace_all_refs")}</option>`;
       if (!project) setOpened(false);
     },
     refresh: () => refresh(false),

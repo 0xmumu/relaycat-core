@@ -125,6 +125,18 @@ test("workspace remembers separate file Git and Shell widths", () => {
   );
 });
 
+test("switching projects drops stale branch and ref options", () => {
+  const setProject = workspacePanel.match(
+    /setProject\(nextProject\)[\s\S]*?if \(!project\) setOpened\(false\);/,
+  )?.[0] ?? "";
+  assert.match(setProject, /branchSelect\.innerHTML = ""/);
+  assert.match(setProject, /historyRef\.innerHTML/);
+  const notRepo = workspacePanel.match(
+    /if \(!status\.is_repo\)[\s\S]*?renderState\(gitList, t\("workspace_not_repo"\)\)/,
+  )?.[0] ?? "";
+  assert.match(notRepo, /branchSelect\.innerHTML = ""/);
+});
+
 test("Shell mode owns the workspace body without showing file or Git chrome", () => {
   assert.match(css, /\.workspace-panel\.shell-mode \.embedded-shell-panel\s*{[^}]*display:\s*flex;/s);
   assert.match(css, /\.workspace-panel\.shell-mode \.ws-main\s*{[^}]*display:\s*none;/s);
