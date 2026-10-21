@@ -404,6 +404,35 @@ export function createWorkspacePanel(
     previewTitle.setAttribute("aria-expanded", String(!collapsed));
   }
 
+  const PULL_REFRESH_THRESHOLD = 160;
+
+  /** An explicit pull-down gesture at the top of a list refreshes that view.
+   *  Switching views deliberately does not refetch, so this is the gesture
+   *  that gives users control over freshness without interrupting reading. */
+  function attachPullToRefresh(container: HTMLElement) {
+    let pulled = 0;
+    let lastWheelAt = 0;
+    let cooldownUntil = 0;
+    container.addEventListener(
+      "wheel",
+      (event) => {
+        const now = performance.now();
+        if (now < cooldownUntil) return;
+        if (event.deltaY >= 0 || container.scrollTop > 0) {
+          pulled = 0;
+          return;
+        }
+        pulled = now - lastWheelAt > 300 ? -event.deltaY : pulled - event.deltaY;
+        lastWheelAt = now;
+        if (pulled < PULL_REFRESH_THRESHOLD) return;
+        pulled = 0;
+        cooldownUntil = now + 1200;
+        void refresh();
+      },
+      { passive: true },
+    );
+  }
+
   function setRefreshVisual(state: "running" | "complete" | "error") {
     if (refreshVisualTimer !== null) {
       window.clearTimeout(refreshVisualTimer);
@@ -1765,6 +1794,7 @@ export function createWorkspacePanel(
     onClose();
   };
   refreshBtn.onclick = () => void refresh();
+  for (const list of [fileTree, gitList, historyList]) attachPullToRefresh(list);
   gitTab.onclick = () => setMode("git");
   historyTab.onclick = () => setMode("history");
   previewTitle.onclick = () => setPreviewCollapsed(!previewCollapsed);

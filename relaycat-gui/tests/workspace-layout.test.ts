@@ -17,6 +17,12 @@ test("git changes starts with the preview collapsed", () => {
   assert.equal(workspacePreviewStartsCollapsed("history"), false);
 });
 
+test("an upward pull at the top of a list refreshes that view", () => {
+  assert.match(workspacePanel, /attachPullToRefresh/);
+  assert.match(workspacePanel, /PULL_REFRESH_THRESHOLD/);
+  assert.match(workspacePanel, /for \(const list of \[fileTree, gitList, historyList\]\)/);
+});
+
 test("switching views restores the previous view instead of rebuilding it", () => {
   const setMode = workspacePanel.match(
     /function setMode\(next: WorkspaceMode\)[\s\S]*?\n  }/,
