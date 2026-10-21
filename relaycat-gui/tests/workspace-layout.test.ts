@@ -52,6 +52,16 @@ test("preview offers line numbers, a wrap toggle and a jump to the file", () => 
   assert.match(css, /\.ws-preview-code\.show-line-numbers \.ws-code-line::before\s*{[^}]*counter\(ws-line\)/s);
 });
 
+test("the panel floor is 320px and sync buttons degrade when narrow", () => {
+  assert.match(css, /\.workspace-panel\s*{[^}]*min-width:\s*320px;/s);
+  assert.match(workspacePanel, /panel\.classList\.toggle\("narrow"/);
+  assert.match(css, /\.workspace-panel\.narrow #workspace-pull::before\s*{[^}]*content:\s*"↓"/s);
+  assert.match(
+    css,
+    /\.workspace-panel\.narrow #workspace-fetch,[\s\S]*?#workspace-push\s*{[^}]*font-size:\s*0;/,
+  );
+});
+
 test("git history scrolls long rows without stretching its filters", () => {
   assert.match(
     css,

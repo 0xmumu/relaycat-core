@@ -151,7 +151,7 @@ test("recognizes every porcelain conflict pair", () => {
 });
 
 test("clamps and defaults the workspace panel width", () => {
-  assert.equal(workspacePanelWidth(100), 280);
+  assert.equal(workspacePanelWidth(100), 320);
   assert.equal(workspacePanelWidth(420), 420);
   assert.equal(workspacePanelWidth(900), 720);
   assert.equal(workspacePanelWidth(Number.NaN), 360);

@@ -640,7 +640,7 @@ body.ws-resizing .workspace-resizer {
 .workspace-panel {
   display: none;
   width: 360px;
-  min-width: 280px;
+  min-width: 320px;
   max-width: 720px;
   height: 100%;
   flex: none;
@@ -1000,6 +1000,38 @@ body.ws-preview-resizing .ws-preview-resizer::after {
   z-index: 2;
   background: var(--panel);
   border-bottom: 1px solid var(--divider);
+}
+/* Branch select plus three sync buttons cannot share the narrow end of the
+   panel, so the buttons drop their labels and keep a glyph + tooltip. */
+.workspace-panel.narrow .ws-git-toolbar {
+  gap: 4px;
+}
+.workspace-panel.narrow #workspace-branch {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.workspace-panel.narrow #workspace-fetch,
+.workspace-panel.narrow #workspace-pull,
+.workspace-panel.narrow #workspace-push {
+  width: 27px;
+  flex: none;
+  padding: 0;
+  overflow: hidden;
+  font-size: 0;
+}
+.workspace-panel.narrow #workspace-fetch::before,
+.workspace-panel.narrow #workspace-pull::before,
+.workspace-panel.narrow #workspace-push::before {
+  font-size: 12px;
+}
+.workspace-panel.narrow #workspace-fetch::before {
+  content: "⟳";
+}
+.workspace-panel.narrow #workspace-pull::before {
+  content: "↓";
+}
+.workspace-panel.narrow #workspace-push::before {
+  content: "↑";
 }
 .ws-git-banner {
   display: flex;

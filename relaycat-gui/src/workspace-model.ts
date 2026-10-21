@@ -212,9 +212,17 @@ export function groupChangesByDirectory(changes: GitDisplayChange[]): GitChangeG
     });
 }
 
+export const WORKSPACE_PANEL_MIN_WIDTH = 320;
+export const WORKSPACE_PANEL_MAX_WIDTH = 720;
+/** Below this width the Git toolbar switches to icon-only sync buttons. */
+export const NARROW_PANEL_WIDTH = 380;
+
 export function workspacePanelWidth(width: number): number {
   const finiteWidth = Number.isFinite(width) ? Math.round(width) : 360;
-  return Math.max(280, Math.min(720, finiteWidth));
+  return Math.max(
+    WORKSPACE_PANEL_MIN_WIDTH,
+    Math.min(WORKSPACE_PANEL_MAX_WIDTH, finiteWidth),
+  );
 }
 
 export function storedWorkspacePanelWidth(stored: string | null, fallback = 360): number {

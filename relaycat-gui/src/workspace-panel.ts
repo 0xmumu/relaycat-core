@@ -43,6 +43,8 @@ import {
   tokenizePreviewLine,
   uniqueWorkspaceEntries,
   workspacePanelWidth,
+  NARROW_PANEL_WIDTH,
+  WORKSPACE_PANEL_MIN_WIDTH,
   workspaceLocalPreviewLimit,
   workspaceEntryDecoration,
   workspacePreviewStartsCollapsed,
@@ -232,9 +234,18 @@ export function createWorkspacePanel(
   function constrainedPanelWidth(requested: number, value: WorkspaceMode): number {
     const width = workspacePanelWidth(requested);
     if (value === "shell") {
-      return Math.min(width, Math.max(280, Math.floor(window.innerWidth * 0.6)));
+      return Math.min(
+        width,
+        Math.max(WORKSPACE_PANEL_MIN_WIDTH, Math.floor(window.innerWidth * 0.6)),
+      );
     }
     return width;
+  }
+
+  function syncNarrowClass(width: number) {
+    // The branch select plus three sync buttons need more room than the panel
+    // can give at its narrow end, so they collapse to icons/labels there.
+    panel.classList.toggle("narrow", width > 0 && width < NARROW_PANEL_WIDTH);
   }
 
   function restorePanelWidth(value: WorkspaceMode) {
@@ -244,7 +255,9 @@ export function createWorkspacePanel(
     const width = widthMode === "shell"
       ? storedWorkspacePanelWidth(stored, 440)
       : storedWorkspacePanelWidth(stored ?? legacy, 360);
-    panel.style.width = `${constrainedPanelWidth(width, value)}px`;
+    const constrained = constrainedPanelWidth(width, value);
+    panel.style.width = `${constrained}px`;
+    syncNarrowClass(constrained);
   }
 
   restorePanelWidth(mode);
@@ -1517,7 +1530,10 @@ export function createWorkspacePanel(
         historyRef.innerHTML = `<option value="">${t("workspace_all_refs")}</option>`;
         const labels = gitSyncButtonLabels(0, 0, t("workspace_pull"), t("workspace_push"));
         pullBtn.textContent = labels.pull;
+
+        pullBtn.title = labels.pull;
         pushBtn.textContent = labels.push;
+        pushBtn.title = labels.push;
         renderGitBanner(null);
         renderState(gitList, t("workspace_not_repo"));
         return true;
@@ -1533,7 +1549,10 @@ export function createWorkspacePanel(
         t("workspace_push"),
       );
       pullBtn.textContent = labels.pull;
+
+      pullBtn.title = labels.pull;
       pushBtn.textContent = labels.push;
+      pushBtn.title = labels.push;
       branchSelect.innerHTML = "";
       historyRef.innerHTML = `<option value="">${t("workspace_all_refs")}</option>`;
       for (const kind of ["local", "remote"] as const) {
@@ -2261,6 +2280,7 @@ export function createWorkspacePanel(
     if (!resizing) return;
     const width = constrainedPanelWidth(window.innerWidth - event.clientX, mode);
     panel.style.width = `${width}px`;
+    syncNarrowClass(width);
     scheduleLayoutChange();
   });
   const finishResize = (event: PointerEvent) => {
@@ -2336,7 +2356,10 @@ export function createWorkspacePanel(
       stagedCount = 0;
       const labels = gitSyncButtonLabels(0, 0, t("workspace_pull"), t("workspace_push"));
       pullBtn.textContent = labels.pull;
+
+      pullBtn.title = labels.pull;
       pushBtn.textContent = labels.push;
+      pushBtn.title = labels.push;
       commitMessage.value = "";
       amendInput.checked = false;
       updateGitControls();
