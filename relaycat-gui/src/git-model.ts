@@ -13,7 +13,10 @@ export function changeActionPolicy(_change: { conflict: boolean }): GitActionPol
 }
 
 export function canCommit(message: string, stagedCount: number, amend: boolean): boolean {
-  return message.trim().length > 0 && (stagedCount > 0 || amend);
+  // Amending without a new message intentionally reuses the previous one, so
+  // the backend resolves it instead of asking for a message again.
+  const hasMessage = message.trim().length > 0 || amend;
+  return hasMessage && (stagedCount > 0 || amend);
 }
 
 export function gitOperationControls(running: boolean) {

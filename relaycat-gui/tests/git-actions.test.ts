@@ -57,6 +57,12 @@ test("commit requires a message and staged changes unless amending", () => {
   assert.equal(canCommit("更新提交", 0, true), true);
 });
 
+test("amending without a message reuses the previous commit message", () => {
+  assert.equal(canCommit("", 0, true), true);
+  assert.equal(canCommit("   ", 1, true), true);
+  assert.equal(canCommit("", 0, false), false);
+});
+
 test("remote controls are locked while an operation is running", () => {
   assert.deepEqual(gitOperationControls(true), {
     fetchDisabled: true,

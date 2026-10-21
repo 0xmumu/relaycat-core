@@ -1,10 +1,12 @@
 use std::fs;
+use std::io::Write;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::runner::{git_output, project_root};
 
 pub(super) fn create_commit(project: &str, message: &str, amend: bool) -> Result<String, String> {
-    if message.trim().is_empty() {
+    if !amend && message.trim().is_empty() {
         return Err("commit message is required".into());
     }
     if message.len() > 1024 * 1024 {
@@ -46,7 +48,19 @@ pub(super) fn create_commit(project: &str, message: &str, amend: bool) -> Result
         "relaycat-commit-{}-{nonce}.txt",
         std::process::id()
     ));
-    fs::write(&message_path, message).map_err(|e| e.to_string())?;
+    let effective_message = if amend && message.trim().is_empty() {
+        // Amending without a new message keeps the previous one. Passing -F
+        // with an empty file would fail, and dropping the message options
+        // would open an editor, so resolve the current message explicitly.
+        let previous = git_output(&root, &["log", "-1", "--pretty=%B"])?;
+        if !previous.status.success() {
+            return Err(String::from_utf8_lossy(&previous.stderr).trim().to_string());
+        }
+        String::from_utf8_lossy(&previous.stdout).into_owned()
+    } else {
+        message.to_string()
+    };
+    write_commit_message(&message_path, &effective_message)?;
     let message_arg = message_path.to_string_lossy().into_owned();
     let mut args = vec!["commit", "-F", message_arg.as_str()];
     if amend {
@@ -60,6 +74,30 @@ pub(super) fn create_commit(project: &str, message: &str, amend: bool) -> Result
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
+}
+
+fn write_commit_message(path: &Path, message: &str) -> Result<(), String> {
+    // Commit messages can contain sensitive context; keep the temp file
+    // readable by its owner only where the platform supports it.
+    let result = {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(path)
+                .and_then(|mut file| file.write_all(message.as_bytes()))
+                .map_err(|e| e.to_string())
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(path, message).map_err(|e| e.to_string())
+        }
+    };
+    result
 }
 
 #[cfg(test)]
@@ -138,5 +176,33 @@ mod tests {
         let result = create_commit(project.to_str().unwrap(), "scoped", false);
         fs::remove_dir_all(&repo).unwrap();
         assert!(result.unwrap_err().contains("outside the session project"));
+    }
+
+    #[test]
+    fn amends_without_a_message_by_reusing_the_previous_one() {
+        let repo = temp_repo();
+        fs::write(repo.join("file.txt"), "hello").unwrap();
+        Command::new("git")
+            .args(["add", "file.txt"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        create_commit(repo.to_str().unwrap(), "first message", false).unwrap();
+        fs::write(repo.join("file.txt"), "hello again").unwrap();
+        Command::new("git")
+            .args(["add", "file.txt"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+
+        create_commit(repo.to_str().unwrap(), "   ", true).unwrap();
+
+        let subject = Command::new("git")
+            .args(["log", "-1", "--pretty=%s"])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        fs::remove_dir_all(&repo).unwrap();
+        assert_eq!(String::from_utf8_lossy(&subject.stdout).trim(), "first message");
     }
 }
