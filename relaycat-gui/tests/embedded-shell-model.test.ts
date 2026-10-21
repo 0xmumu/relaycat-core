@@ -35,7 +35,7 @@ test("file Git and Shell entries are mutually exclusive per session", () => {
   assert.equal(toggleTermSidePanel("files", "files"), null);
   assert.equal(toggleTermSidePanel("files", "git"), "git");
   assert.equal(toggleTermSidePanel("git", "git"), null);
-  assert.equal(toggleTermSidePanel("history", "git"), null);
+  assert.equal(toggleTermSidePanel("history", "git"), "git");
   assert.equal(toggleTermSidePanel("git", "shell"), "shell");
   assert.equal(toggleTermSidePanel("shell", "shell"), null);
   assert.equal(toggleTermSidePanel("shell", "files"), "files");

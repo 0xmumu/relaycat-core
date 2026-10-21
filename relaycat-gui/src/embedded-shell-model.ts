@@ -57,7 +57,9 @@ export function toggleTermSidePanel(
   current: TermSidePanelMode,
   requested: Exclude<TermSidePanelMode, null>,
 ): TermSidePanelMode {
-  if (requested === "git" && (current === "git" || current === "history")) return null;
+  // The rail's Git button is the entry point of the whole Git section, so from
+  // the history sub-view it returns to changes instead of closing the panel.
+  if (requested === "git" && current === "history") return "git";
   return current === requested ? null : requested;
 }
 
