@@ -241,6 +241,9 @@ function applyI18n() {
   document.querySelectorAll<HTMLElement>("[data-i18n-title]").forEach((node) => {
     node.title = t(node.dataset.i18nTitle!);
   });
+  document.querySelectorAll<HTMLElement>("[data-i18n-aria-label]").forEach((node) => {
+    node.setAttribute("aria-label", t(node.dataset.i18nAriaLabel!));
+  });
   const androidVersion = document.getElementById("lp-android-version");
   if (androidVersion?.dataset.version) {
     androidVersion.textContent = `${t("lp_dl_android")} v${androidVersion.dataset.version}`;
@@ -1861,6 +1864,7 @@ const SHORTCUTS: [string, string][] = [
   ["Ctrl + W", "sc_close"],
   ["Ctrl + 1…9", "sc_switch"],
   ["Ctrl + \\", "sc_split"],
+  ["Ctrl + Shift + E", "sc_workspace"],
   ["Ctrl + ,", "sc_settings"],
   ["Ctrl + /", "sc_shortcuts"],
   ["Ctrl + G", "sc_mode"],
@@ -2858,6 +2862,10 @@ function wireUi() {
     } else if (mod && ev.key === "\\") {
       ev.preventDefault();
       toggleSplit();
+    } else if (mod && ev.shiftKey && ev.key.toLowerCase() === "e") {
+      ev.preventDefault();
+      const tab = tabs.find((item) => item.id === activeId);
+      if (tab) applyTermSidePanel(tab, toggleTermSidePanel(tab.sidePanelMode, "files"));
     } else if (mod && ev.key === "/") {
       ev.preventDefault();
       openShortcuts();

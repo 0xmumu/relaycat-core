@@ -2157,6 +2157,32 @@ export function createWorkspacePanel(
     setOpened(false);
     onClose();
   };
+
+  // Tabs behave like a real tablist: left/right arrows move between them.
+  const onTabKeydown = (event: KeyboardEvent) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const next: WorkspaceMode = mode === "git" ? "history" : "git";
+    setMode(next);
+    (next === "git" ? gitTab : historyTab).focus();
+  };
+  gitTab.addEventListener("keydown", onTabKeydown);
+  historyTab.addEventListener("keydown", onTabKeydown);
+
+  panel.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const target = event.target as HTMLElement | null;
+    const tag = target?.tagName;
+    // Escape inside a field should leave the field first, not the panel.
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
+      target?.blur();
+      event.stopPropagation();
+      return;
+    }
+    event.stopPropagation();
+    setOpened(false);
+    onClose();
+  });
   refreshBtn.onclick = () => void refresh();
   for (const list of [fileTree, gitList, historyList]) attachPullToRefresh(list);
   fileSearch.oninput = () => {
@@ -2395,6 +2421,18 @@ export function createWorkspacePanel(
   };
   resizer.addEventListener("pointerup", finishResize);
   resizer.addEventListener("pointercancel", finishResize);
+  resizer.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    if (window.matchMedia("(max-width: 760px)").matches) return;
+    event.preventDefault();
+    // The panel sits on the right edge, so moving the divider left widens it.
+    const delta = event.key === "ArrowLeft" ? 16 : -16;
+    const width = constrainedPanelWidth(currentPanelWidth() + delta, mode);
+    panel.style.width = `${width}px`;
+    syncNarrowClass(width);
+    localStorage.setItem(WIDTH_STORAGE_KEYS[widthStorageMode(mode)], String(width));
+    scheduleLayoutChange();
+  });
 
   clearPreview();
   setPreviewCollapsed(previewCollapsed);

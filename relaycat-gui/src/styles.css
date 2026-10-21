@@ -697,9 +697,11 @@ button {
   display: block;
 }
 .workspace-resizer:hover,
+.workspace-resizer:focus-visible,
 body.ws-resizing .workspace-resizer {
   background: var(--accent-soft);
   border-left-color: var(--accent);
+  outline: none;
 }
 .workspace-panel {
   display: none;
@@ -850,6 +852,13 @@ body.ws-resizing .workspace-resizer {
 .ws-tab:hover {
   color: var(--text);
   background: var(--hover);
+}
+.ws-tab:focus-visible,
+.ws-icon-btn:focus-visible,
+.ws-small-btn:focus-visible,
+.ws-filter-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .ws-tab.active {
   color: var(--accent);

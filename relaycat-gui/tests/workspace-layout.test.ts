@@ -53,6 +53,18 @@ test("preview offers line numbers, a wrap toggle and a jump to the file", () => 
   assert.match(css, /\.ws-preview-code\.show-line-numbers \.ws-code-line::before\s*{[^}]*counter\(ws-line\)/s);
 });
 
+test("the workspace panel is keyboard operable", () => {
+  assert.match(html, /id="workspace-resizer"[^>]*role="separator"/);
+  assert.match(html, /id="workspace-resizer"[^>]*tabindex="0"/);
+  assert.match(workspacePanel, /const onTabKeydown/);
+  assert.match(workspacePanel, /event\.key !== "ArrowLeft" && event\.key !== "ArrowRight"/);
+  assert.match(workspacePanel, /tag === "INPUT" \|\| tag === "TEXTAREA"/);
+  assert.match(mainSource, /ev\.shiftKey && ev\.key\.toLowerCase\(\) === "e"/);
+  assert.match(mainSource, /Ctrl \+ Shift \+ E/);
+  assert.match(mainSource, /data-i18n-aria-label/);
+  assert.match(css, /\.workspace-resizer:focus-visible/);
+});
+
 test("the workspace rail labels itself and hints once", () => {
   assert.match(mainSource, /term-tool-label/);
   assert.match(mainSource, /workspace_rail_hint/);
