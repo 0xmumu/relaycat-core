@@ -52,6 +52,14 @@ test("preview offers line numbers, a wrap toggle and a jump to the file", () => 
   assert.match(css, /\.ws-preview-code\.show-line-numbers \.ws-code-line::before\s*{[^}]*counter\(ws-line\)/s);
 });
 
+test("destructive prompts state the concrete consequences", () => {
+  assert.match(workspacePanel, /workspace_reset_hard_confirm/);
+  assert.match(workspacePanel, /workspace_reset_mixed_confirm/);
+  assert.match(workspacePanel, /lastGitSections\.unstaged\.length/);
+  assert.match(workspacePanel, /workspace_revert_confirm/);
+  assert.doesNotMatch(workspacePanel, /workspace_danger_confirm/);
+});
+
 test("dead-end empty states offer the next step", () => {
   assert.match(workspacePanel, /git_init_repository/);
   assert.match(workspacePanel, /workspace_init_repo_confirm/);

@@ -1692,6 +1692,18 @@ export function createWorkspacePanel(
     commitMenu = null;
   }
 
+  /**
+   * Each reset mode loses a different amount of work, so the prompt names the
+   * concrete consequences instead of just repeating the command.
+   */
+  function resetConfirmMessage(mode: "soft" | "mixed" | "hard", hash: string): string {
+    if (mode === "soft") return t("workspace_reset_soft_confirm", hash);
+    if (mode === "mixed") {
+      return t("workspace_reset_mixed_confirm", hash, String(lastGitSections.staged.length));
+    }
+    return t("workspace_reset_hard_confirm", hash, String(lastGitSections.unstaged.length));
+  }
+
   function openCommitMenu(commit: GitCommit, x: number, y: number) {
     closeCommitMenu();
     const menu = document.createElement("div");
@@ -1734,8 +1746,11 @@ export function createWorkspacePanel(
         commit: commit.hash,
       });
     });
-    add(t("workspace_revert"), true, () => {
-      void confirm(t("workspace_danger_confirm", t("workspace_revert"))).then((ok) => {
+    add(t("workspace_revert"), false, () => {
+      // Revert adds an inverse commit; it does not rewrite history, so it is
+      // not styled as a destructive action. The prompt still states what the
+      // new commit will do.
+      void confirm(t("workspace_revert_confirm", commit.short_hash)).then((ok) => {
         if (ok) {
           void runHistoryMutation(t("workspace_revert"), "git_commit_action", {
             action: "revert",
@@ -1747,7 +1762,7 @@ export function createWorkspacePanel(
     for (const mode of ["soft", "mixed", "hard"] as const) {
       const label = t(`workspace_reset_${mode}`);
       add(label, mode === "hard", () => {
-        void confirm(t("workspace_danger_confirm", label)).then((ok) => {
+        void confirm(resetConfirmMessage(mode, commit.short_hash)).then((ok) => {
           if (ok) {
             void runHistoryMutation(label, "git_reset_to", { commit: commit.hash, mode });
           }
