@@ -833,6 +833,42 @@ body.ws-preview-resizing .ws-preview-resizer::after {
 .ws-browser[hidden] {
   display: none;
 }
+.ws-tree-search {
+  position: sticky;
+  top: -6px;
+  z-index: 2;
+  padding: 4px 8px 6px;
+  background: var(--panel);
+}
+.ws-tree-search .ws-filter-input {
+  width: 100%;
+  height: 27px;
+}
+.ws-tree-results[hidden] {
+  display: none;
+}
+.ws-tree-result {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 4px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.ws-tree-result:hover {
+  background: var(--hover);
+}
+.ws-tree-result-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+}
 #workspace-git-view:not([hidden]) {
   position: relative;
   display: flex;

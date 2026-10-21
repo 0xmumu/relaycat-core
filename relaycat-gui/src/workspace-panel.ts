@@ -109,6 +109,8 @@ export function createWorkspacePanel(
   const gitView = document.querySelector("#workspace-git-view") as HTMLElement;
   const historyView = document.querySelector("#workspace-history-view") as HTMLElement;
   const fileTree = document.querySelector("#workspace-file-tree") as HTMLElement;
+  const fileSearch = document.querySelector("#workspace-file-search") as HTMLInputElement;
+  const fileResults = document.querySelector("#workspace-file-results") as HTMLElement;
   const gitMeta = document.querySelector("#workspace-git-meta") as HTMLElement;
   const gitBanner = document.querySelector("#workspace-git-banner") as HTMLElement;
   const gitBannerText = document.querySelector("#workspace-git-banner-text") as HTMLElement;
@@ -170,6 +172,8 @@ export function createWorkspacePanel(
   let commitMenu: HTMLElement | null = null;
   let fileMenu: HTMLElement | null = null;
   let gitPathFilter: { path: string; isDir: boolean } | null = null;
+  let fileSearchSequence = 0;
+  let fileSearchTimer: number | null = null;
   const RECENT_COMMIT_STORAGE_KEY = "relaycat.workspaceCommitHistory";
   const RECENT_COMMIT_LIMIT = 5;
   const COMMIT_SUBJECT_LIMIT = 50;
@@ -787,6 +791,64 @@ export function createWorkspacePanel(
     const ok = await loadDirectoryPage("", fileTree, 0, activeProject, revision, 0, false);
     if (ok) loadedViews.add("files");
     return ok;
+  }
+
+  function renderSearchResults(entries: WorkspaceEntry[]) {
+    fileResults.innerHTML = "";
+    if (entries.length === 0) {
+      renderState(fileResults, t("workspace_file_search_empty"));
+      return;
+    }
+    for (const entry of entries) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "ws-tree-result";
+      row.title = entry.relative_path;
+      const path = document.createElement("span");
+      path.className = "ws-tree-result-path";
+      path.textContent = entry.relative_path;
+      row.appendChild(path);
+      row.onclick = () => void previewFile(entry.relative_path);
+      fileResults.appendChild(row);
+    }
+  }
+
+  async function searchFiles(rawQuery: string) {
+    const query = rawQuery.trim();
+    if (!query) {
+      fileSearchSequence += 1;
+      fileResults.hidden = true;
+      fileResults.innerHTML = "";
+      fileTree.hidden = false;
+      return;
+    }
+    if (!project) return;
+    const activeProject = project;
+    const revision = projectRevision;
+    const sequence = ++fileSearchSequence;
+    fileTree.hidden = true;
+    fileResults.hidden = false;
+    renderState(fileResults, t("workspace_loading"));
+    try {
+      const entries = await invoke<WorkspaceEntry[]>("search_workspace_files", {
+        project: activeProject,
+        query,
+        limit: 100,
+      });
+      if (
+        project !== activeProject ||
+        projectRevision !== revision ||
+        sequence !== fileSearchSequence
+      ) return;
+      renderSearchResults(entries.filter((entry) => !entry.is_dir));
+    } catch (error) {
+      if (
+        project !== activeProject ||
+        projectRevision !== revision ||
+        sequence !== fileSearchSequence
+      ) return;
+      renderLoadError(fileResults, error);
+    }
   }
 
   async function previewGitChange(change: GitDisplayChange, restore = false) {
@@ -1795,6 +1857,29 @@ export function createWorkspacePanel(
   };
   refreshBtn.onclick = () => void refresh();
   for (const list of [fileTree, gitList, historyList]) attachPullToRefresh(list);
+  fileSearch.oninput = () => {
+    if (fileSearchTimer !== null) window.clearTimeout(fileSearchTimer);
+    fileSearchTimer = window.setTimeout(() => {
+      fileSearchTimer = null;
+      void searchFiles(fileSearch.value);
+    }, 180);
+  };
+  fileSearch.onkeydown = (event) => {
+    if (event.key === "Escape") {
+      fileSearch.value = "";
+      void searchFiles("");
+      return;
+    }
+    if (event.key === "Enter") {
+      if (fileSearchTimer !== null) {
+        window.clearTimeout(fileSearchTimer);
+        fileSearchTimer = null;
+      }
+      void searchFiles(fileSearch.value).then(() => {
+        fileResults.querySelector<HTMLButtonElement>(".ws-tree-result")?.click();
+      });
+    }
+  };
   gitTab.onclick = () => setMode("git");
   historyTab.onclick = () => setMode("history");
   previewTitle.onclick = () => setPreviewCollapsed(!previewCollapsed);
@@ -2015,6 +2100,11 @@ export function createWorkspacePanel(
       gitRefreshSequence += 1;
       gitPathFilter = null;
       renderGitFilter();
+      fileSearch.value = "";
+      fileSearchSequence += 1;
+      fileResults.hidden = true;
+      fileResults.innerHTML = "";
+      fileTree.hidden = false;
       loadedViews.clear();
       for (const key of Object.keys(previewRestore)) {
         delete previewRestore[key as WorkspaceMode];

@@ -17,6 +17,12 @@ test("git changes starts with the preview collapsed", () => {
   assert.equal(workspacePreviewStartsCollapsed("history"), false);
 });
 
+test("the file tree can be searched by path", () => {
+  assert.match(html, /id="workspace-file-search"/);
+  assert.match(workspacePanel, /search_workspace_files/);
+  assert.match(workspacePanel, /workspace_file_search_empty/);
+});
+
 test("an upward pull at the top of a list refreshes that view", () => {
   assert.match(workspacePanel, /attachPullToRefresh/);
   assert.match(workspacePanel, /PULL_REFRESH_THRESHOLD/);

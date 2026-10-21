@@ -165,7 +165,11 @@
           <div class="ws-operation" id="workspace-operation" aria-live="polite"></div>
           <div class="ws-main">
             <section class="ws-browser" id="workspace-files-view">
+              <div class="ws-tree-search">
+                <input class="ws-filter-input" id="workspace-file-search" type="search" autocomplete="off" spellcheck="false" data-i18n-ph="workspace_file_search" placeholder="搜索文件…" />
+              </div>
               <div class="ws-tree" id="workspace-file-tree"></div>
+              <div class="ws-tree-results" id="workspace-file-results" hidden></div>
             </section>
             <section class="ws-browser" id="workspace-git-view" hidden>
               <div class="ws-git-banner" id="workspace-git-banner" hidden>

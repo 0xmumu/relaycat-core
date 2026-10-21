@@ -142,6 +142,28 @@ fn list_workspace_entries_page_impl(
     Ok(page.into())
 }
 
+fn search_workspace_files_impl(
+    project: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<WorkspaceEntryDto>, String> {
+    let root = ProjectRoot::open(project).map_err(|error| error.to_string())?;
+    let page = FileService::new(root)
+        .search(query, limit.clamp(1, MAX_DIRECTORY_ENTRIES) as u16)
+        .map_err(|error| error.to_string())?;
+    Ok(page
+        .entries
+        .into_iter()
+        .map(|entry| WorkspaceEntryDto {
+            name: entry.name,
+            relative_path: entry.path,
+            is_dir: entry.is_directory,
+            size_bytes: entry.size,
+            modified_unix_seconds: entry.modified_unix_seconds,
+        })
+        .collect())
+}
+
 fn read_workspace_file_impl(
     project: &str,
     relative_path: &str,
@@ -527,6 +549,19 @@ pub async fn list_workspace_entries(
 }
 
 #[tauri::command]
+pub async fn search_workspace_files(
+    project: String,
+    query: String,
+    limit: usize,
+) -> Result<Vec<WorkspaceEntryDto>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        search_workspace_files_impl(&project, &query, limit)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn read_workspace_file(
     project: String,
     relative_path: String,
@@ -655,6 +690,23 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("src", true), ("README.md", false)]
         );
+    }
+
+    #[test]
+    fn searches_files_by_path_fragment() {
+        let root = temp_project("search");
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(root.join("README.md"), "hello").unwrap();
+
+        let results = search_workspace_files_impl(root.to_str().unwrap(), "MAIN", 20).unwrap();
+        let missing = search_workspace_files_impl(root.to_str().unwrap(), "nothing", 20).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].relative_path, "src/main.rs");
+        assert!(!results[0].is_dir);
+        assert!(missing.is_empty());
     }
 
     #[test]
