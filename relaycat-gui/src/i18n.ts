@@ -135,6 +135,13 @@ export const I18N: Record<Lang, Record<string, string>> = {
     workspace_remote_success: "{0} 已完成",
     workspace_remote_error: "{0} 执行失败",
     workspace_remote_no_output: "Git 操作成功完成，远端没有返回其他信息。",
+    workspace_fetch: "抓取",
+    workspace_pull: "拉取",
+    workspace_push: "推送",
+    workspace_tag: "标签",
+    workspace_detached: "游离头指针",
+    workspace_ref_group_local: "本地分支",
+    workspace_ref_group_remote: "远程分支",
 
     // new session
     ns_title: "新建会话",
@@ -563,6 +570,13 @@ export const I18N: Record<Lang, Record<string, string>> = {
     workspace_remote_success: "{0} completed",
     workspace_remote_error: "{0} failed",
     workspace_remote_no_output: "Git completed successfully without additional remote output.",
+    workspace_fetch: "Fetch",
+    workspace_pull: "Pull",
+    workspace_push: "Push",
+    workspace_tag: "Tag",
+    workspace_detached: "Detached HEAD",
+    workspace_ref_group_local: "Local",
+    workspace_ref_group_remote: "Remote",
 
     ns_title: "New session",
     ns_tool: "Tool",

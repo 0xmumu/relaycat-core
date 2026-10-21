@@ -51,12 +51,17 @@ export function gitMutationUsesInlineFeedback(command: string): boolean {
   return new Set(["git_stage_paths", "git_unstage_paths", "git_apply_patch"]).has(command);
 }
 
-export function gitSyncButtonLabels(ahead: number, behind: number) {
+export function gitSyncButtonLabels(
+  ahead: number,
+  behind: number,
+  pullLabel = "Pull",
+  pushLabel = "Push",
+) {
   const count = (label: string, value: number) =>
     Number.isFinite(value) && value > 0 ? `${label}(${Math.floor(value)})` : label;
   return {
-    pull: count("Pull", behind),
-    push: count("Push", ahead),
+    pull: count(pullLabel, behind),
+    push: count(pushLabel, ahead),
   };
 }
 

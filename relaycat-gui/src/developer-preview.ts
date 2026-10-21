@@ -1,4 +1,6 @@
-export type DeveloperPreviewKind = "json" | "json_lines" | "table" | "svg" | "diff" | null;
+// JSON-family files intentionally stay in source mode (see
+// workspace-model.test.ts), so only these kinds reach the panel.
+export type DeveloperPreviewKind = "table" | "svg" | "diff" | null;
 
 export interface JsonPreviewNode {
   key?: string;

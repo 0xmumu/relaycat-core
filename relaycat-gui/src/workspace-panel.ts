@@ -407,8 +407,9 @@ export function createWorkspacePanel(
 
   function formatBytes(size: number): string {
     if (size < 1024) return `${size} B`;
-    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KiB`;
-    return `${(size / (1024 * 1024)).toFixed(1)} MiB`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
 
   function renderHighlightedText(content: string, path: string) {
@@ -769,6 +770,7 @@ export function createWorkspacePanel(
           const headerIndex = rawLines.findIndex(
             (line, lineIndex) => lineIndex >= searchFrom && line === hunk.header,
           );
+          if (headerIndex < 0) return;
           searchFrom = Math.max(searchFrom, headerIndex + hunk.lines.length + 1);
           hunk.lines.forEach((line, lineIndex) => {
             if (!line.startsWith("+") && !line.startsWith("-")) return;
@@ -814,10 +816,12 @@ export function createWorkspacePanel(
   }
 
   function remoteOperationLabel(operation: "fetch" | "pull" | "push", count: number) {
-    if (operation === "fetch") return "Fetch";
+    if (operation === "fetch") return t("workspace_fetch");
     const labels = gitSyncButtonLabels(
       operation === "push" ? count : 0,
       operation === "pull" ? count : 0,
+      t("workspace_pull"),
+      t("workspace_push"),
     );
     return operation === "push" ? labels.push : labels.pull;
   }
@@ -904,20 +908,23 @@ export function createWorkspacePanel(
   ): Promise<boolean> {
     if (!project || gitOperationRunning) return false;
     const activeProject = project;
+    const revision = projectRevision;
     const inlineFeedback = gitMutationUsesInlineFeedback(command);
     gitOperationRunning = true;
     updateGitControls();
     if (!inlineFeedback) setOperation(t("workspace_operation_running", label));
     try {
       const result = await invoke<string | void>(command, { project: activeProject, ...args });
-      if (project !== activeProject) return false;
+      if (project !== activeProject || projectRevision !== revision) return false;
       if (!inlineFeedback) {
         setOperation(typeof result === "string" && result ? result : label);
       }
       await refreshGit(true);
       return true;
     } catch (error) {
-      if (project === activeProject) setOperation(String(error));
+      if (project === activeProject && projectRevision === revision) {
+        setOperation(String(error));
+      }
       return false;
     } finally {
       gitOperationRunning = false;
@@ -1106,7 +1113,7 @@ export function createWorkspacePanel(
         repositoryAhead = 0;
         repositoryBehind = 0;
         gitMeta.textContent = "";
-        const labels = gitSyncButtonLabels(0, 0);
+        const labels = gitSyncButtonLabels(0, 0, t("workspace_pull"), t("workspace_push"));
         pullBtn.textContent = labels.pull;
         pushBtn.textContent = labels.push;
         renderState(gitList, t("workspace_not_repo"));
@@ -1114,15 +1121,22 @@ export function createWorkspacePanel(
       }
       repositoryAhead = summary.ahead;
       repositoryBehind = summary.behind;
-      gitMeta.textContent = `⎇ ${summary.branch ?? "DETACHED"}${summary.upstream ? ` · ${summary.upstream}` : ""} · ↑${summary.ahead} ↓${summary.behind}${summary.operation ? ` · ${summary.operation}` : ""}`;
-      const labels = gitSyncButtonLabels(summary.ahead, summary.behind);
+      gitMeta.textContent = `⎇ ${summary.branch ?? t("workspace_detached")}${summary.upstream ? ` · ${summary.upstream}` : ""} · ↑${summary.ahead} ↓${summary.behind}${summary.operation ? ` · ${summary.operation}` : ""}`;
+      const labels = gitSyncButtonLabels(
+        summary.ahead,
+        summary.behind,
+        t("workspace_pull"),
+        t("workspace_push"),
+      );
       pullBtn.textContent = labels.pull;
       pushBtn.textContent = labels.push;
       branchSelect.innerHTML = "";
       historyRef.innerHTML = `<option value="">${t("workspace_all_refs")}</option>`;
       for (const kind of ["local", "remote"] as const) {
         const group = document.createElement("optgroup");
-        group.label = kind === "local" ? "Local" : "Remote";
+        group.label = kind === "local"
+          ? t("workspace_ref_group_local")
+          : t("workspace_ref_group_remote");
         for (const ref of refs.filter((item) => item.kind === kind)) {
           const option = document.createElement("option");
           option.value = ref.name;
@@ -1225,10 +1239,10 @@ export function createWorkspacePanel(
         });
       }
     });
-    add("Tag", false, () => {
+    add(t("workspace_tag"), false, () => {
       const name = window.prompt(t("workspace_create_tag_prompt"));
       if (name) {
-        void runHistoryMutation("Tag", "git_create_tag", { name, target: commit.hash });
+        void runHistoryMutation(t("workspace_tag"), "git_create_tag", { name, target: commit.hash });
       }
     });
     add(t("workspace_cherry_pick"), false, () => {
@@ -1671,7 +1685,7 @@ export function createWorkspacePanel(
       unstagedPaths = [];
       stagedCount = 0;
       commitExpanded = false;
-      const labels = gitSyncButtonLabels(0, 0);
+      const labels = gitSyncButtonLabels(0, 0, t("workspace_pull"), t("workspace_push"));
       pullBtn.textContent = labels.pull;
       pushBtn.textContent = labels.push;
       commitMessage.value = "";
