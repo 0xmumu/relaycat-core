@@ -1,12 +1,18 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_GIT_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const GIT_NOT_INSTALLED_ERROR: &str = "git_not_installed";
+// Grandchildren (for example background processes started by Git hooks) can
+// inherit the piped streams and keep the write ends open after `git` itself
+// has exited, which would block a plain reader join forever. Wait for each
+// reader with a bounded grace period and fail loudly instead of hanging.
+const GIT_OUTPUT_DRAIN_GRACE: Duration = Duration::from_secs(5);
 
 pub fn project_root(project: &str) -> Result<PathBuf, String> {
     let root = Path::new(project)
@@ -39,8 +45,14 @@ pub fn git_output_with_timeout(
         .map_err(git_spawn_error)?;
     let stdout = child.stdout.take().ok_or("git stdout unavailable")?;
     let stderr = child.stderr.take().ok_or("git stderr unavailable")?;
-    let stdout_reader = thread::spawn(move || read_bounded_stream(stdout));
-    let stderr_reader = thread::spawn(move || read_bounded_stream(stderr));
+    let (stdout_tx, stdout_rx) = mpsc::channel::<Result<(Vec<u8>, bool), String>>();
+    let (stderr_tx, stderr_rx) = mpsc::channel::<Result<(Vec<u8>, bool), String>>();
+    thread::spawn(move || {
+        let _ = stdout_tx.send(read_bounded_stream(stdout));
+    });
+    thread::spawn(move || {
+        let _ = stderr_tx.send(read_bounded_stream(stderr));
+    });
     let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
@@ -49,18 +61,15 @@ pub fn git_output_with_timeout(
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
+            // Reader threads are detached on purpose: a grandchild that still
+            // holds the pipe can keep them blocked, and the command must not
+            // wait for that to surface the timeout to the frontend.
             return Err("git command timed out".into());
         }
         thread::sleep(Duration::from_millis(20));
     };
-    let (stdout, stdout_truncated) = stdout_reader
-        .join()
-        .map_err(|_| "git stdout reader failed")??;
-    let (stderr, stderr_truncated) = stderr_reader
-        .join()
-        .map_err(|_| "git stderr reader failed")??;
+    let (stdout, stdout_truncated) = receive_bounded(&stdout_rx, GIT_OUTPUT_DRAIN_GRACE)??;
+    let (stderr, stderr_truncated) = receive_bounded(&stderr_rx, GIT_OUTPUT_DRAIN_GRACE)??;
     if stdout_truncated || stderr_truncated {
         return Err("git output exceeded limit".into());
     }
@@ -69,6 +78,15 @@ pub fn git_output_with_timeout(
         stdout,
         stderr,
     })
+}
+
+fn receive_bounded(
+    receiver: &mpsc::Receiver<Result<(Vec<u8>, bool), String>>,
+    wait: Duration,
+) -> Result<Result<(Vec<u8>, bool), String>, String> {
+    receiver
+        .recv_timeout(wait)
+        .map_err(|_| "git output stream stalled".to_string())
 }
 
 fn git_spawn_error(error: std::io::Error) -> String {
@@ -124,7 +142,8 @@ mod tests {
     use std::fs;
     use std::io;
     use std::process::Command;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::mpsc;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::*;
 
@@ -139,6 +158,15 @@ mod tests {
     #[test]
     fn output_is_capped_without_splitting_utf8() {
         assert_eq!(bounded_text("ab中文cd".as_bytes(), 5), "ab中");
+    }
+
+    #[test]
+    fn stalled_output_streams_fail_instead_of_hanging() {
+        let (_sender, receiver) = mpsc::channel::<Result<(Vec<u8>, bool), String>>();
+
+        let error = receive_bounded(&receiver, Duration::from_millis(20)).unwrap_err();
+
+        assert_eq!(error, "git output stream stalled");
     }
 
     #[test]
