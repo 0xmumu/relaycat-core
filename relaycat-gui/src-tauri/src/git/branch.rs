@@ -23,6 +23,16 @@ fn validate_branch(root: &std::path::Path, name: &str) -> Result<(), String> {
 
 pub(super) fn list_refs(project: &str) -> Result<Vec<GitRefDto>, String> {
     let root = project_root(project)?;
+    if !git_output(&root, &["rev-parse", "--git-dir"])?
+        .status
+        .success()
+    {
+        // Callers distinguish "not a repository" from real failures through
+        // the status/summary DTOs, which report `is_repo: false` instead of
+        // erroring. Returning an empty list keeps that contract; erroring here
+        // would surface a raw `fatal: not a git repository` message in the UI.
+        return Ok(Vec::new());
+    }
     let current = git_text(&root, &["branch", "--show-current"])?;
     let current = current.trim();
     let mut refs = Vec::new();
@@ -246,5 +256,23 @@ mod tests {
         );
         fs::remove_dir_all(&repo).unwrap();
         assert!(result.unwrap_err().contains("invalid branch start point"));
+    }
+
+    #[test]
+    fn lists_no_refs_outside_a_repository() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "relaycat-git-branch-nonrepo-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).unwrap();
+
+        let refs = list_refs(path.to_str().unwrap()).unwrap();
+
+        fs::remove_dir_all(&path).unwrap();
+        assert!(refs.is_empty());
     }
 }
