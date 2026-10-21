@@ -1628,6 +1628,37 @@ body.ws-preview-resizing .ws-preview-resizer::after {
   flex-direction: column;
   background: var(--bg);
 }
+.ws-preview-head {
+  position: relative;
+  flex: none;
+  min-width: 0;
+}
+.ws-preview-wrap {
+  position: absolute;
+  right: 8px;
+  top: 6px;
+  z-index: 1;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--dim);
+  cursor: pointer;
+  font: 10px var(--mono);
+  line-height: 1;
+}
+.ws-preview-wrap:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.ws-preview-wrap[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ws-preview-wrap[hidden] {
+  display: none;
+}
 .ws-preview-title {
   height: 34px;
   flex: none;
@@ -1885,6 +1916,34 @@ body.ws-preview-resizing .ws-preview-resizer::after {
   width: max-content;
   min-width: 100%;
   min-height: 1.55em;
+}
+.ws-preview-code.wrap {
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ws-preview-code.wrap .ws-code-line,
+.ws-preview-code.wrap .ws-diff-line {
+  width: auto;
+  min-width: 0;
+}
+.ws-preview-code.show-line-numbers {
+  counter-reset: ws-line;
+}
+.ws-preview-code.show-line-numbers .ws-code-line {
+  position: relative;
+  counter-increment: ws-line;
+  padding-left: 34px;
+}
+.ws-preview-code.show-line-numbers .ws-code-line::before {
+  content: counter(ws-line);
+  position: absolute;
+  left: 0;
+  width: 24px;
+  color: var(--dim);
+  text-align: right;
+  opacity: 0.55;
+  user-select: none;
 }
 .ws-token.keyword {
   color: #c792ea;

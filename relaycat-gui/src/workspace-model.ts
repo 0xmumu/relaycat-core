@@ -104,10 +104,19 @@ export function isConflictedChange(
   return CONFLICT_STATUSES.has(status);
 }
 
+export const NARROW_PREVIEW_WIDTH = 420;
+
+/**
+ * Git changes are a to-do list, so the preview starts collapsed there. A very
+ * narrow panel also starts collapsed: below the threshold the code column is
+ * too thin to read, and the list is the more useful half.
+ */
 export function workspacePreviewStartsCollapsed(
   mode: "files" | "git" | "history",
+  panelWidth?: number,
 ): boolean {
-  return mode === "git";
+  if (mode === "git") return true;
+  return panelWidth !== undefined && panelWidth > 0 && panelWidth < NARROW_PREVIEW_WIDTH;
 }
 
 /**
@@ -117,9 +126,10 @@ export function workspacePreviewStartsCollapsed(
 export function previewCollapseFor(
   remembered: boolean | undefined,
   mode: "files" | "git" | "history" | "shell",
+  panelWidth?: number,
 ): boolean {
   if (remembered !== undefined) return remembered;
-  return mode === "shell" ? false : workspacePreviewStartsCollapsed(mode);
+  return mode === "shell" ? false : workspacePreviewStartsCollapsed(mode, panelWidth);
 }
 
 export function groupGitChanges(changes: GitChange[]): {

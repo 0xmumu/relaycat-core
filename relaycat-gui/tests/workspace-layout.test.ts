@@ -35,8 +35,21 @@ test("switching views restores the previous view instead of rebuilding it", () =
   )?.[0] ?? "";
   assert.match(setMode, /previewRestore\[mode\]/);
   assert.match(setMode, /loadedViews\.has\(mode\)/);
-  assert.match(setMode, /previewCollapseFor\(collapsedByMode\[mode\], mode\)/);
+  assert.match(
+    setMode,
+    /previewCollapseFor\(collapsedByMode\[mode\], mode, currentPanelWidth\(\)\)/,
+  );
   assert.doesNotMatch(setMode, /^\s+void refresh\(\);$/m);
+});
+
+test("preview offers line numbers, a wrap toggle and a jump to the file", () => {
+  assert.match(html, /id="workspace-preview-wrap"/);
+  assert.match(workspacePanel, /relaycat\.workspacePreviewWrap/);
+  assert.match(workspacePanel, /previewCode\.classList\.add\("show-line-numbers"\)/);
+  assert.match(workspacePanel, /previewCode\.classList\.remove\("show-line-numbers"\)/);
+  assert.match(workspacePanel, /workspace_view_file/);
+  assert.match(css, /\.ws-preview-code\.wrap\s*{[^}]*white-space:\s*pre-wrap;/s);
+  assert.match(css, /\.ws-preview-code\.show-line-numbers \.ws-code-line::before\s*{[^}]*counter\(ws-line\)/s);
 });
 
 test("git history scrolls long rows without stretching its filters", () => {

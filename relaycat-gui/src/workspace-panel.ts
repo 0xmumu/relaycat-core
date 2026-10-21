@@ -157,6 +157,7 @@ export function createWorkspacePanel(
   const workspaceMain = document.querySelector(".ws-main") as HTMLElement;
   const previewResizer = document.querySelector("#workspace-preview-resizer") as HTMLElement;
   const previewTitle = document.querySelector("#workspace-preview-title") as HTMLButtonElement;
+  const previewWrap = document.querySelector("#workspace-preview-wrap") as HTMLButtonElement;
   const previewActions = document.querySelector("#workspace-preview-actions") as HTMLElement;
   const previewNotice = document.querySelector("#workspace-preview-notice") as HTMLElement;
   const previewImage = document.querySelector("#workspace-preview-image") as HTMLImageElement;
@@ -201,7 +202,10 @@ export function createWorkspacePanel(
   let recentCommitMessages = loadRecentCommitMessages();
   let stagedPaths: string[] = [];
   let unstagedPaths: string[] = [];
-  let previewCollapsed = workspacePreviewStartsCollapsed(mode);
+  const currentPanelWidth = () => panel.getBoundingClientRect().width;
+  let previewCollapsed = workspacePreviewStartsCollapsed(mode, currentPanelWidth());
+  const PREVIEW_WRAP_KEY = "relaycat.workspacePreviewWrap";
+  let previewWrapEnabled = localStorage.getItem(PREVIEW_WRAP_KEY) !== "0";
   // Per-view UI state, so switching views keeps the user's place instead of
   // rebuilding the tree, the history list and the preview from scratch.
   const collapsedByMode: Partial<Record<WorkspaceMode, boolean>> = {};
@@ -270,6 +274,22 @@ export function createWorkspacePanel(
     directoryObservers.clear();
   }
 
+  function applyPreviewWrap() {
+    previewCode.classList.toggle("wrap", previewWrapEnabled);
+    // The control only makes sense while code (not an image or notice) is on
+    // screen, and its visibility mirrors the code block.
+    previewWrap.hidden = previewCode.hidden;
+    previewWrap.setAttribute("aria-pressed", String(previewWrapEnabled));
+  }
+
+  // previewCode.hidden is toggled from several render paths (image, markdown,
+  // notice, loading, error); observing the attribute keeps the wrap control in
+  // sync from one place instead of touching every branch.
+  new MutationObserver(applyPreviewWrap).observe(previewCode, {
+    attributes: true,
+    attributeFilter: ["hidden"],
+  });
+
   function clearPreview() {
     resetMarkdownPreview();
     resetDeveloperPreview();
@@ -282,6 +302,7 @@ export function createWorkspacePanel(
     markdownPreview.innerHTML = "";
     previewCode.hidden = false;
     previewCode.textContent = "";
+    previewCode.classList.remove("show-line-numbers");
     previewActions.innerHTML = "";
   }
 
@@ -496,18 +517,20 @@ export function createWorkspacePanel(
   function renderHighlightedText(content: string, path: string) {
     const language = previewLanguage(path);
     previewCode.innerHTML = "";
-    if (!language) {
-      previewCode.textContent = content;
-      return;
-    }
+    previewCode.classList.add("show-line-numbers");
+    if (content === "") return;
     for (const line of content.split("\n")) {
       const lineEl = document.createElement("span");
       lineEl.className = "ws-code-line";
-      for (const token of tokenizePreviewLine(line, language)) {
-        const tokenEl = document.createElement("span");
-        tokenEl.className = `ws-token ${token.kind}`;
-        tokenEl.textContent = token.text;
-        lineEl.appendChild(tokenEl);
+      if (!language) {
+        lineEl.textContent = line;
+      } else {
+        for (const token of tokenizePreviewLine(line, language)) {
+          const tokenEl = document.createElement("span");
+          tokenEl.className = `ws-token ${token.kind}`;
+          tokenEl.textContent = token.text;
+          lineEl.appendChild(tokenEl);
+        }
       }
       previewCode.appendChild(lineEl);
     }
@@ -515,6 +538,7 @@ export function createWorkspacePanel(
 
   function renderHighlightedDiff(content: string, sourcePath: string) {
     previewCode.innerHTML = "";
+    previewCode.classList.remove("show-line-numbers");
     let activePath = sourcePath;
     for (const line of content.split("\n")) {
       const nextPath = line.match(/^\+\+\+ b\/(.+)$/)?.[1];
@@ -896,6 +920,17 @@ export function createWorkspacePanel(
       if (project !== activeProject || projectRevision !== revision) return;
       renderPreview(change.path, preview, true);
       previewActions.innerHTML = "";
+      // Seeing the diff is often the start of a question about the whole file
+      // ("what else is in here?"), so offer the file preview next to the hunks.
+      // Deleted paths have nothing left on disk to open.
+      if (change.status !== "D") {
+        const viewFile = document.createElement("button");
+        viewFile.type = "button";
+        viewFile.className = "ws-small-btn";
+        viewFile.textContent = t("workspace_view_file");
+        viewFile.onclick = () => void previewFile(change.path, change.path, "git");
+        previewActions.appendChild(viewFile);
+      }
       if (preview.kind === "text") {
         const file = parseUnifiedDiff(preview.content)[0];
         const rawLines = preview.content.split("\n");
@@ -1984,7 +2019,9 @@ export function createWorkspacePanel(
       const restore = previewRestore[mode];
       if (restore) void restore();
       else clearPreview();
-      setPreviewCollapsed(previewCollapseFor(collapsedByMode[mode], mode));
+      setPreviewCollapsed(
+        previewCollapseFor(collapsedByMode[mode], mode, currentPanelWidth()),
+      );
       if (opened) {
         startRefreshTimer();
         // The DOM of an already loaded view is left untouched: stale views are
@@ -2026,6 +2063,12 @@ export function createWorkspacePanel(
   gitTab.onclick = () => setMode("git");
   historyTab.onclick = () => setMode("history");
   previewTitle.onclick = () => setPreviewCollapsed(!previewCollapsed);
+  previewWrap.onclick = () => {
+    previewWrapEnabled = !previewWrapEnabled;
+    localStorage.setItem(PREVIEW_WRAP_KEY, previewWrapEnabled ? "1" : "0");
+    applyPreviewWrap();
+  };
+  applyPreviewWrap();
   previewResizer.addEventListener("pointerdown", (event) => {
     if (previewCollapsed) return;
     event.preventDefault();
@@ -2302,7 +2345,11 @@ export function createWorkspacePanel(
       projectLabel.textContent = project ? projectBasename(project) : "";
       projectLabel.title = project ?? "";
       clearPreview();
-      setPreviewCollapsed(mode === "shell" ? false : workspacePreviewStartsCollapsed(mode));
+      setPreviewCollapsed(
+        mode === "shell"
+          ? false
+          : workspacePreviewStartsCollapsed(mode, currentPanelWidth()),
+      );
       renderState(fileTree, project ? t("workspace_loading") : "");
       renderState(gitList, project ? t("workspace_loading") : "");
       renderState(historyList, project ? t("workspace_loading") : "");
