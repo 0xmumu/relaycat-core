@@ -958,6 +958,38 @@ body.ws-preview-resizing .ws-preview-resizer::after {
   background: var(--panel);
   border-bottom: 1px solid var(--divider);
 }
+.ws-git-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin: 0 8px 6px;
+  border-radius: 6px;
+  background: var(--inset);
+  box-shadow: inset 2px 0 0 var(--red);
+}
+.ws-git-banner[hidden] {
+  display: none;
+}
+.ws-git-banner-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.ws-git-banner-actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+.ws-git-section[data-git-section="conflicted"] .ws-git-section-title {
+  color: var(--red);
+}
+.ws-git-row.conflicted .ws-git-status {
+  color: var(--red);
+  font-weight: 500;
+}
 .ws-select,
 .ws-filter-input,
 .ws-commit-message {

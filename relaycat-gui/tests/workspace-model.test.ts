@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   groupGitChanges,
+  isConflictedChange,
   isGitNotInstalledError,
   gitStatusFingerprint,
   gitHistoryPage,
@@ -79,6 +80,35 @@ test("groups index and worktree changes into separate sections", () => {
       ["both.ts", "M"],
     ],
   );
+});
+
+test("conflicted paths are split into their own group", () => {
+  const result = groupGitChanges([
+    { path: "both.ts", index_status: "U", worktree_status: "U" },
+    { path: "added.ts", index_status: "A", worktree_status: "A" },
+    { path: "normal.ts", index_status: null, worktree_status: "M" },
+  ]);
+
+  assert.deepEqual(
+    result.conflicted.map(({ path, status }) => [path, status]),
+    [
+      ["both.ts", "UU"],
+      ["added.ts", "AA"],
+    ],
+  );
+  assert.deepEqual(result.unstaged.map(({ path }) => path), ["normal.ts"]);
+  assert.equal(result.staged.length, 0);
+});
+
+test("recognizes every porcelain conflict pair", () => {
+  for (const code of ["DD", "AU", "UD", "UA", "DU", "AA", "UU"]) {
+    assert.equal(
+      isConflictedChange({ index_status: code[0], worktree_status: code[1] }),
+      true,
+    );
+  }
+  assert.equal(isConflictedChange({ index_status: "M", worktree_status: "M" }), false);
+  assert.equal(isConflictedChange({ index_status: "A", worktree_status: null }), false);
 });
 
 test("clamps and defaults the workspace panel width", () => {

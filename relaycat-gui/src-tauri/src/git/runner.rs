@@ -38,6 +38,10 @@ pub fn git_output_with_timeout(
         .current_dir(project)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "Never")
+        // The GUI has no terminal to host an editor. Commands that would open
+        // one (for example `rebase --continue`) keep their existing message.
+        .env("GIT_EDITOR", "true")
+        .env("GIT_SEQUENCE_EDITOR", "true")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

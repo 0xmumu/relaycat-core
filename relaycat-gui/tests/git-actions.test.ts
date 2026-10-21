@@ -6,6 +6,7 @@ import {
   canCommit,
   buildSelectedLinesPatch,
   changeActionPolicy,
+  gitOperationActions,
   gitOperationControls,
   gitMutationUsesInlineFeedback,
   gitSyncButtonLabels,
@@ -70,6 +71,14 @@ test("remote controls are locked while an operation is running", () => {
     pushDisabled: true,
     branchDisabled: true,
   });
+});
+
+test("operation banners only offer actions that can finish the operation", () => {
+  assert.deepEqual(gitOperationActions(null), []);
+  assert.deepEqual(gitOperationActions("rebase"), ["continue", "skip", "abort"]);
+  assert.deepEqual(gitOperationActions("cherry_pick"), ["continue", "skip", "abort"]);
+  assert.deepEqual(gitOperationActions("revert"), ["continue", "skip", "abort"]);
+  assert.deepEqual(gitOperationActions("merge"), ["abort"]);
 });
 
 test("history filters trim empty values and preserve selected refs", () => {

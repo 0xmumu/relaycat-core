@@ -90,6 +90,17 @@ export interface GitDisplayChange {
   path: string;
   status: string;
   staged: boolean;
+  conflicted: boolean;
+}
+
+// Porcelain v1 XY pairs that mean the path is in an unresolved conflict.
+const CONFLICT_STATUSES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+
+export function isConflictedChange(
+  change: Pick<GitChange, "index_status" | "worktree_status">,
+): boolean {
+  const status = `${change.index_status ?? " "}${change.worktree_status ?? " "}`;
+  return CONFLICT_STATUSES.has(status);
 }
 
 export function workspacePreviewStartsCollapsed(
@@ -111,17 +122,29 @@ export function previewCollapseFor(
 }
 
 export function groupGitChanges(changes: GitChange[]): {
+  conflicted: GitDisplayChange[];
   staged: GitDisplayChange[];
   unstaged: GitDisplayChange[];
 } {
+  const conflicted: GitDisplayChange[] = [];
   const staged: GitDisplayChange[] = [];
   const unstaged: GitDisplayChange[] = [];
   for (const change of changes) {
+    if (isConflictedChange(change)) {
+      conflicted.push({
+        path: change.path,
+        status: `${change.index_status ?? " "}${change.worktree_status ?? " "}`.trim(),
+        staged: false,
+        conflicted: true,
+      });
+      continue;
+    }
     if (change.index_status) {
       staged.push({
         path: change.path,
         status: change.index_status,
         staged: true,
+        conflicted: false,
       });
     }
     if (change.worktree_status) {
@@ -129,10 +152,11 @@ export function groupGitChanges(changes: GitChange[]): {
         path: change.path,
         status: change.worktree_status,
         staged: false,
+        conflicted: false,
       });
     }
   }
-  return { staged, unstaged };
+  return { conflicted, staged, unstaged };
 }
 
 export function workspacePanelWidth(width: number): number {

@@ -28,6 +28,22 @@ export function gitOperationControls(running: boolean) {
   };
 }
 
+export type GitOperationAction = "continue" | "skip" | "abort";
+
+/**
+ * Which recovery actions make sense for the operation Git is paused on.
+ * A merge is finished by committing the resolved index, so it only offers an
+ * abort; rebase/cherry-pick/revert can continue, skip or abort.
+ */
+export function gitOperationActions(operation: string | null): GitOperationAction[] {
+  if (!operation) return [];
+  if (operation === "merge") return ["abort"];
+  if (operation === "rebase" || operation === "cherry_pick" || operation === "revert") {
+    return ["continue", "skip", "abort"];
+  }
+  return ["abort"];
+}
+
 export function historyFilterArgs(query: string, author: string, reference: string) {
   const value = (input: string) => input.trim() || null;
   return {

@@ -13,6 +13,7 @@ import {
   buildSelectedLinesPatch,
   gitOperationControls,
   gitMutationUsesInlineFeedback,
+  gitOperationActions,
   gitSyncButtonLabels,
   historyFilterArgs,
   parseUnifiedDiff,
@@ -108,6 +109,9 @@ export function createWorkspacePanel(
   const historyView = document.querySelector("#workspace-history-view") as HTMLElement;
   const fileTree = document.querySelector("#workspace-file-tree") as HTMLElement;
   const gitMeta = document.querySelector("#workspace-git-meta") as HTMLElement;
+  const gitBanner = document.querySelector("#workspace-git-banner") as HTMLElement;
+  const gitBannerText = document.querySelector("#workspace-git-banner-text") as HTMLElement;
+  const gitBannerActions = document.querySelector("#workspace-git-banner-actions") as HTMLElement;
   const gitList = document.querySelector("#workspace-git-list") as HTMLElement;
   const operationEl = document.querySelector("#workspace-operation") as HTMLElement;
   const branchSelect = document.querySelector("#workspace-branch") as HTMLSelectElement;
@@ -990,6 +994,7 @@ export function createWorkspacePanel(
   function buildGitRow(change: GitDisplayChange) {
     const row = document.createElement("div");
     row.className = "ws-git-row";
+    if (change.conflicted) row.classList.add("conflicted");
     row.dataset.changeKey = gitChangeKey(change);
     row.title = change.path;
     const main = document.createElement("button");
@@ -1005,7 +1010,17 @@ export function createWorkspacePanel(
     main.onclick = () => void previewGitChange(change);
     const actions = document.createElement("span");
     actions.className = "ws-row-actions";
-    if (change.staged) {
+    if (change.conflicted) {
+      // Staging a conflicted path is how Git records the resolution, so the
+      // action says exactly that instead of the generic "stage".
+      actions.appendChild(
+        rowAction(t("workspace_mark_resolved"), "✓", false, () => {
+          void runGitMutation(t("workspace_mark_resolved"), "git_stage_paths", {
+            paths: [change.path],
+          });
+        }),
+      );
+    } else if (change.staged) {
       actions.appendChild(
         rowAction(t("workspace_unstage"), "−", false, () => {
           void runGitMutation(t("workspace_unstage"), "git_unstage_paths", {
@@ -1037,7 +1052,7 @@ export function createWorkspacePanel(
     return row;
   }
 
-  function gitSection(kind: "staged" | "unstaged", title: string) {
+  function gitSection(kind: "conflicted" | "staged" | "unstaged", title: string) {
     let section = gitList.querySelector<HTMLElement>(`[data-git-section="${kind}"]`);
     if (!section) {
       section = document.createElement("section");
@@ -1055,11 +1070,12 @@ export function createWorkspacePanel(
   }
 
   function reconcileGitSections(
+    conflicted: GitDisplayChange[],
     staged: GitDisplayChange[],
     unstaged: GitDisplayChange[],
   ) {
     gitList.querySelector(".ws-state")?.remove();
-    const nextChanges = [...staged, ...unstaged];
+    const nextChanges = [...conflicted, ...staged, ...unstaged];
     const nextByKey = new Map(nextChanges.map((change) => [gitChangeKey(change), change]));
     const existingRows = Array.from(
       gitList.querySelectorAll<HTMLElement>(".ws-git-row[data-change-key]"),
@@ -1079,10 +1095,12 @@ export function createWorkspacePanel(
       window.setTimeout(() => row.remove(), 140);
     }
 
+    const conflictedSection = gitSection("conflicted", t("workspace_conflicts"));
     const stagedSection = gitSection("staged", t("workspace_staged"));
     const unstagedSection = gitSection("unstaged", t("workspace_unstaged"));
-    gitList.append(stagedSection, unstagedSection);
+    gitList.append(conflictedSection, stagedSection, unstagedSection);
     for (const [section, items] of [
+      [conflictedSection, conflicted],
       [stagedSection, staged],
       [unstagedSection, unstaged],
     ] as const) {
@@ -1093,7 +1111,12 @@ export function createWorkspacePanel(
       for (const item of items) {
         const key = gitChangeKey(item);
         let row = existingByKey.get(key);
-        if (!row) {
+        // A path can turn from a normal change into a conflict (and back)
+        // without changing its key, so the row is rebuilt when its shape no
+        // longer matches.
+        const staleShape = !!row && row.classList.contains("conflicted") !== item.conflicted;
+        if (!row || staleShape) {
+          if (row) row.remove();
           row = buildGitRow(item);
           row.classList.add("ws-row-enter");
           row.addEventListener("animationend", () => row?.classList.remove("ws-row-enter"), {
@@ -1107,6 +1130,50 @@ export function createWorkspacePanel(
         }
         rows.appendChild(row);
       }
+    }
+  }
+
+  const OPERATION_LABEL_KEYS: Record<string, string> = {
+    rebase: "workspace_git_operation_rebase",
+    merge: "workspace_git_operation_merge",
+    cherry_pick: "workspace_git_operation_cherry_pick",
+    revert: "workspace_git_operation_revert",
+  };
+
+  function operationActionLabel(action: "continue" | "skip" | "abort") {
+    return action === "continue"
+      ? t("workspace_git_continue")
+      : action === "skip"
+        ? t("workspace_git_skip")
+        : t("workspace_git_abort");
+  }
+
+  async function runOperationAction(action: "continue" | "skip" | "abort") {
+    const label = operationActionLabel(action);
+    if (action === "abort") {
+      const ok = await confirm(t("workspace_git_abort_confirm"));
+      if (!ok) return;
+    }
+    const done = await runGitMutation(label, "git_operation_action", { action });
+    if (done) await refreshHistory(true);
+  }
+
+  function renderGitBanner(operation: string | null) {
+    gitBanner.hidden = !operation;
+    gitBannerActions.innerHTML = "";
+    if (!operation) {
+      gitBannerText.textContent = "";
+      return;
+    }
+    const name = t(OPERATION_LABEL_KEYS[operation] ?? "workspace_git_operation_in_progress");
+    gitBannerText.textContent = `${name} · ${t("workspace_git_operation_hint")}`;
+    for (const action of gitOperationActions(operation)) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `ws-small-btn${action === "abort" ? " danger" : ""}`;
+      button.textContent = operationActionLabel(action);
+      button.onclick = () => void runOperationAction(action);
+      gitBannerActions.appendChild(button);
     }
   }
 
@@ -1147,12 +1214,14 @@ export function createWorkspacePanel(
         const labels = gitSyncButtonLabels(0, 0, t("workspace_pull"), t("workspace_push"));
         pullBtn.textContent = labels.pull;
         pushBtn.textContent = labels.push;
+        renderGitBanner(null);
         renderState(gitList, t("workspace_not_repo"));
         return true;
       }
       repositoryAhead = summary.ahead;
       repositoryBehind = summary.behind;
-      gitMeta.textContent = `⎇ ${summary.branch ?? t("workspace_detached")}${summary.upstream ? ` · ${summary.upstream}` : ""} · ↑${summary.ahead} ↓${summary.behind}${summary.operation ? ` · ${summary.operation}` : ""}`;
+      renderGitBanner(summary.operation);
+      gitMeta.textContent = `⎇ ${summary.branch ?? t("workspace_detached")}${summary.upstream ? ` · ${summary.upstream}` : ""} · ↑${summary.ahead} ↓${summary.behind}`;
       const labels = gitSyncButtonLabels(
         summary.ahead,
         summary.behind,
@@ -1191,11 +1260,15 @@ export function createWorkspacePanel(
       unstagedPaths = [...new Set(sections.unstaged.map((change) => change.path))];
       stagedCount = stagedPaths.length;
       updateGitControls();
-      if (sections.staged.length === 0 && sections.unstaged.length === 0) {
+      if (
+        sections.conflicted.length === 0 &&
+        sections.staged.length === 0 &&
+        sections.unstaged.length === 0
+      ) {
         renderState(gitList, t("workspace_no_changes"));
         return true;
       }
-      reconcileGitSections(sections.staged, sections.unstaged);
+      reconcileGitSections(sections.conflicted, sections.staged, sections.unstaged);
       return true;
     } catch (error) {
       if (
@@ -1751,6 +1824,7 @@ export function createWorkspacePanel(
       renderState(gitList, project ? t("workspace_loading") : "");
       renderState(historyList, project ? t("workspace_loading") : "");
       gitMeta.textContent = "";
+      renderGitBanner(null);
       branchSelect.innerHTML = "";
       historyRef.innerHTML = `<option value="">${t("workspace_all_refs")}</option>`;
       if (!project) setOpened(false);

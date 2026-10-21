@@ -50,6 +50,37 @@ fn current_operation(project: &Path) -> Option<String> {
     }
 }
 
+fn operation_action_args(operation: &str, action: &str) -> Result<Vec<&'static str>, String> {
+    let args = match (operation, action) {
+        ("rebase", "continue") => vec!["rebase", "--continue"],
+        ("rebase", "skip") => vec!["rebase", "--skip"],
+        ("rebase", "abort") => vec!["rebase", "--abort"],
+        ("cherry_pick", "continue") => vec!["cherry-pick", "--continue"],
+        ("cherry_pick", "skip") => vec!["cherry-pick", "--skip"],
+        ("cherry_pick", "abort") => vec!["cherry-pick", "--abort"],
+        ("revert", "continue") => vec!["revert", "--continue"],
+        ("revert", "skip") => vec!["revert", "--skip"],
+        ("revert", "abort") => vec!["revert", "--abort"],
+        // A merge is completed by committing the resolved index, so it only
+        // supports aborting from here.
+        ("merge", "abort") => vec!["merge", "--abort"],
+        _ => return Err("unsupported git operation action".into()),
+    };
+    Ok(args)
+}
+
+pub(super) fn operation_action(project: &str, action: &str) -> Result<(), String> {
+    let root = project_root(project)?;
+    let operation = current_operation(&root).ok_or("no git operation in progress")?;
+    let args = operation_action_args(&operation, action)?;
+    let output = git_output(&root, &args)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
 pub(super) fn repository_summary(project: &str) -> Result<RepositorySummaryDto, String> {
     let root = project_root(project)?;
     if !git_output(&root, &["rev-parse", "--git-dir"])?
@@ -106,5 +137,19 @@ mod tests {
     #[test]
     fn parses_ahead_and_behind_counts() {
         assert_eq!(parse_ahead_behind("3\t2\n").unwrap(), (3, 2));
+    }
+
+    #[test]
+    fn maps_operation_actions_to_git_arguments() {
+        assert_eq!(
+            operation_action_args("rebase", "continue").unwrap(),
+            ["rebase", "--continue"]
+        );
+        assert_eq!(
+            operation_action_args("merge", "abort").unwrap(),
+            ["merge", "--abort"]
+        );
+        assert!(operation_action_args("merge", "continue").is_err());
+        assert!(operation_action_args("rebase", "reset").is_err());
     }
 }

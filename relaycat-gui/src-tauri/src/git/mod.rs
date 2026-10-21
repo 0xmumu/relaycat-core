@@ -145,3 +145,10 @@ pub async fn git_repository_summary(project: String) -> Result<RepositorySummary
         .await
         .map_err(|e| e.to_string())?
 }
+
+#[tauri::command]
+pub async fn git_operation_action(project: String, action: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || status::operation_action(&project, &action))
+        .await
+        .map_err(|e| e.to_string())?
+}
