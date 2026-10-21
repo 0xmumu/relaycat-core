@@ -11,6 +11,7 @@ const workspacePanel = readFileSync(
   "utf8",
 );
 const mainSource = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
+const i18nSource = readFileSync(new URL("../src/i18n.ts", import.meta.url), "utf8");
 
 test("git changes starts with the preview collapsed", () => {
   assert.equal(workspacePreviewStartsCollapsed("git"), true);
@@ -51,6 +52,22 @@ test("preview offers line numbers, a wrap toggle and a jump to the file", () => 
   assert.match(workspacePanel, /workspace_view_file/);
   assert.match(css, /\.ws-preview-code\.wrap\s*{[^}]*white-space:\s*pre-wrap;/s);
   assert.match(css, /\.ws-preview-code\.show-line-numbers \.ws-code-line::before\s*{[^}]*counter\(ws-line\)/s);
+});
+
+test("remote operations keep the Fetch/Pull/Push names in every language", () => {
+  // Developers recognise these three verbs better than any translation, so
+  // both language tables must keep them verbatim.
+  for (const key of ["workspace_fetch", "workspace_pull", "workspace_push"]) {
+    const name = key.replace("workspace_", "");
+    const label = name.charAt(0).toUpperCase() + name.slice(1);
+    assert.equal(
+      (i18nSource.match(new RegExp(`${key}: "${label}"`, "g")) ?? []).length,
+      2,
+      `${key} should be "${label}" in both zh and en`,
+    );
+  }
+  assert.doesNotMatch(i18nSource, /workspace_(fetch|pull|push): "[^"]*[^\x00-\x7F]/);
+  assert.equal((i18nSource.match(/workspace_commit_push: "Commit & Push"/g) ?? []).length, 2);
 });
 
 test("the workspace panel is keyboard operable", () => {

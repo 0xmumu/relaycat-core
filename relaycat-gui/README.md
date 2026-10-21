@@ -22,7 +22,7 @@ GUI 不会把项目上传到云端执行。Claude Code、Codex、OpenCode、Gemi
 - 查看 Git 状态、文件 Diff、提交 Diff 和历史记录。
 - 支持暂存、取消暂存、按 hunk 或选中行操作、提交和修订提交。
 - 支持创建、切换、重命名和删除分支，以及创建标签。
-- 支持 fetch、pull、push、提交并推送等远程操作。
+- 支持 Fetch、Pull、Push 和 Commit & Push 等远程操作。
 - 提供 cherry-pick、revert 和不同模式的 reset，并在危险操作前确认。
 - Windows 未安装 Git 时，明确提示“未检测到 Git”，不会混淆为普通工作区请求失败。
 
