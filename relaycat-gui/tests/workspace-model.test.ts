@@ -177,16 +177,15 @@ test("uses the default width when no saved preference exists", () => {
 });
 
 test("a remembered collapse choice wins over the per-view default", () => {
+  // Every list view starts collapsed so the list gets the full height.
   assert.equal(previewCollapseFor(undefined, "git"), true);
-  assert.equal(previewCollapseFor(undefined, "files"), false);
+  assert.equal(previewCollapseFor(undefined, "files"), true);
+  assert.equal(previewCollapseFor(undefined, "history"), true);
   assert.equal(previewCollapseFor(undefined, "shell"), false);
+  // Once the user opens the preview in a view, switching back keeps it open.
   assert.equal(previewCollapseFor(false, "git"), false);
+  assert.equal(previewCollapseFor(false, "files"), false);
   assert.equal(previewCollapseFor(true, "files"), true);
-  // A narrow panel starts with the preview collapsed; the user's own choice
-  // still wins over the width default.
-  assert.equal(previewCollapseFor(undefined, "files", 360), true);
-  assert.equal(previewCollapseFor(undefined, "files", 520), false);
-  assert.equal(previewCollapseFor(false, "files", 300), false);
 });
 
 test("extracts a project name from Unix and Windows paths", () => {

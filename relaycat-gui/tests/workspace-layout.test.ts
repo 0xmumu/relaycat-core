@@ -13,10 +13,16 @@ const workspacePanel = readFileSync(
 const mainSource = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 const i18nSource = readFileSync(new URL("../src/i18n.ts", import.meta.url), "utf8");
 
-test("git changes starts with the preview collapsed", () => {
-  assert.equal(workspacePreviewStartsCollapsed("git"), true);
-  assert.equal(workspacePreviewStartsCollapsed("files"), false);
-  assert.equal(workspacePreviewStartsCollapsed("history"), false);
+test("list views start with the preview collapsed and open it on selection", () => {
+  assert.equal(workspacePreviewStartsCollapsed(), true);
+  const loading = workspacePanel.match(/function showPreviewLoading[\s\S]*?\n  }/)?.[0] ?? "";
+  assert.match(loading, /setPreviewCollapsed\(false\)/);
+  // Collapsing hides everything except the header, so the title bar (now
+  // wrapped in .ws-preview-head for the wrap toggle) must stay reachable.
+  assert.match(
+    css,
+    /\.ws-main\.preview-collapsed \.ws-preview > :not\(\.ws-preview-head\)\s*{[^}]*display:\s*none !important;/s,
+  );
 });
 
 test("the file tree can be searched by path", () => {
@@ -37,10 +43,7 @@ test("switching views restores the previous view instead of rebuilding it", () =
   )?.[0] ?? "";
   assert.match(setMode, /previewRestore\[mode\]/);
   assert.match(setMode, /loadedViews\.has\(mode\)/);
-  assert.match(
-    setMode,
-    /previewCollapseFor\(collapsedByMode\[mode\], mode, currentPanelWidth\(\)\)/,
-  );
+  assert.match(setMode, /previewCollapseFor\(collapsedByMode\[mode\], mode\)/);
   assert.doesNotMatch(setMode, /^\s+void refresh\(\);$/m);
 });
 
@@ -101,6 +104,8 @@ test("the workspace rail labels itself and hints once", () => {
   assert.match(mainSource, /relaycat\.workspaceRailHint/);
   assert.match(css, /\.term-toolbtn:hover \.term-tool-label/);
   assert.match(css, /\.term-toolrail-hint\s*{[^}]*position:\s*absolute;/s);
+  // The rail sits clear of the terminal's vertical scrollbar.
+  assert.match(css, /\.term-toolrail\s*{[^}]*right:\s*24px;/s);
 });
 
 test("destructive prompts state the concrete consequences", () => {

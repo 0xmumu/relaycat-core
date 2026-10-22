@@ -215,7 +215,7 @@ export function createWorkspacePanel(
   let stagedPaths: string[] = [];
   let unstagedPaths: string[] = [];
   const currentPanelWidth = () => panel.getBoundingClientRect().width;
-  let previewCollapsed = workspacePreviewStartsCollapsed(mode, currentPanelWidth());
+  let previewCollapsed = workspacePreviewStartsCollapsed();
   const PREVIEW_WRAP_KEY = "relaycat.workspacePreviewWrap";
   let previewWrapEnabled = localStorage.getItem(PREVIEW_WRAP_KEY) !== "0";
   // Image preview zoom. `imageZoom` is a scale where 1 means one image pixel
@@ -332,8 +332,8 @@ export function createWorkspacePanel(
   function applyPreviewWrap() {
     previewCode.classList.toggle("wrap", previewWrapEnabled);
     // The control only makes sense while code (not an image or notice) is on
-    // screen, and its visibility mirrors the code block.
-    previewWrap.hidden = previewCode.hidden;
+    // screen, and it is pointless while the whole preview is collapsed.
+    previewWrap.hidden = previewCode.hidden || previewCollapsed;
     previewWrap.setAttribute("aria-pressed", String(previewWrapEnabled));
   }
 
@@ -617,6 +617,7 @@ export function createWorkspacePanel(
     previewCollapsed = collapsed;
     workspaceMain.classList.toggle("preview-collapsed", collapsed);
     previewTitle.setAttribute("aria-expanded", String(!collapsed));
+    applyPreviewWrap();
   }
 
   const PULL_REFRESH_THRESHOLD = 160;
@@ -2394,7 +2395,7 @@ export function createWorkspacePanel(
       if (restore) void restore();
       else clearPreview();
       setPreviewCollapsed(
-        previewCollapseFor(collapsedByMode[mode], mode, currentPanelWidth()),
+        previewCollapseFor(collapsedByMode[mode], mode),
       );
       if (opened) {
         startRefreshTimer();
@@ -2761,7 +2762,7 @@ export function createWorkspacePanel(
       setPreviewCollapsed(
         mode === "shell"
           ? false
-          : workspacePreviewStartsCollapsed(mode, currentPanelWidth()),
+          : workspacePreviewStartsCollapsed(),
       );
       renderState(fileTree, project ? t("workspace_loading") : "");
       renderState(gitList, project ? t("workspace_loading") : "");
