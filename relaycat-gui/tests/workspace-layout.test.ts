@@ -54,6 +54,19 @@ test("preview offers line numbers, a wrap toggle and a jump to the file", () => 
   assert.match(css, /\.ws-preview-code\.show-line-numbers \.ws-code-line::before\s*{[^}]*counter\(ws-line\)/s);
 });
 
+test("image preview supports fit/actual zoom with pinch and keyboard", () => {
+  assert.match(html, /id="workspace-image-view"[^>]*tabindex="0"/);
+  assert.match(html, /class="ws-image-stage"/);
+  assert.match(workspacePanel, /"gesturechange"/);
+  assert.match(workspacePanel, /!event\.ctrlKey && !event\.metaKey/);
+  assert.match(workspacePanel, /setImageZoom\(imageZoom \* Math\.exp/);
+  assert.match(workspacePanel, /imageFitMode/);
+  assert.match(workspacePanel, /workspace_image_fit/);
+  assert.match(workspacePanel, /previewImage\.naturalWidth/);
+  assert.match(css, /\.ws-image-view\s*{[^}]*overflow:\s*auto;/s);
+  assert.match(css, /\.ws-image-stage\s*{[^}]*min-width:\s*100%;/s);
+});
+
 test("remote operations keep the Fetch/Pull/Push names in every language", () => {
   // Developers recognise these three verbs better than any translation, so
   // both language tables must keep them verbatim.

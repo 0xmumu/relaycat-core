@@ -212,8 +212,37 @@ export function groupChangesByDirectory(changes: GitDisplayChange[]): GitChangeG
     });
 }
 
-export const WORKSPACE_PANEL_MIN_WIDTH = 320;
-export const WORKSPACE_PANEL_MAX_WIDTH = 720;
+/** Image preview zoom bounds: 10% – 800%. */
+export const IMAGE_MIN_ZOOM = 0.1;
+export const IMAGE_MAX_ZOOM = 8;
+
+export function clampImageZoom(zoom: number): number {
+  if (!Number.isFinite(zoom)) return 1;
+  return Math.min(IMAGE_MAX_ZOOM, Math.max(IMAGE_MIN_ZOOM, zoom));
+}
+
+/**
+ * Scale that shows the whole image inside the viewport without ever enlarging
+ * past 1:1 (small icons stay at their natural size instead of being blown up).
+ */
+export function imageFitScale(
+  naturalWidth: number,
+  naturalHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): number {
+  if (
+    !(naturalWidth > 0) ||
+    !(naturalHeight > 0) ||
+    !(viewportWidth > 0) ||
+    !(viewportHeight > 0)
+  ) {
+    return 1;
+  }
+  return Math.min(1, viewportWidth / naturalWidth, viewportHeight / naturalHeight);
+}
+
+export const WORKSPACE_PANEL_MIN_WIDTH = 320;export const WORKSPACE_PANEL_MAX_WIDTH = 720;
 /** Below this width the Git toolbar switches to icon-only sync buttons. */
 export const NARROW_PANEL_WIDTH = 380;
 

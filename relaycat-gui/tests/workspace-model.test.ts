@@ -6,6 +6,8 @@ import {
   groupGitChanges,
   groupChangesByDirectory,
   gitRelativeTime,
+  clampImageZoom,
+  imageFitScale,
   isConflictedChange,
   isGitNotInstalledError,
   gitStatusFingerprint,
@@ -104,6 +106,17 @@ test("groups changes by directory with aggregated diff stats", () => {
   assert.deepEqual(groups[2].stat, { added: 2, deleted: 0, binary: true });
   assert.deepEqual(groups[0].stat, { added: 1, deleted: 1, binary: false });
   assert.deepEqual(groupChangesByDirectory([]), []);
+});
+
+test("image zoom clamps and fit never enlarges small images", () => {
+  assert.equal(clampImageZoom(0.01), 0.1);
+  assert.equal(clampImageZoom(99), 8);
+  assert.equal(clampImageZoom(Number.NaN), 1);
+  assert.equal(imageFitScale(2000, 1000, 1000, 1000), 0.5);
+  assert.equal(imageFitScale(2000, 1000, 500, 500), 0.25);
+  assert.equal(imageFitScale(800, 600, 1000, 1000), 1);
+  assert.equal(imageFitScale(0, 100, 500, 500), 1);
+  assert.equal(imageFitScale(100, 100, 0, 500), 1);
 });
 
 test("history timestamps fall back to coarse relative units", () => {

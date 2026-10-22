@@ -29,6 +29,10 @@ import {
   gitHistoryPage,
   gitStatusFingerprint,
   gitRelativeTime,
+  clampImageZoom,
+  imageFitScale,
+  IMAGE_MAX_ZOOM,
+  IMAGE_MIN_ZOOM,
   historyNearBottom,
   canRenderMarkdown,
   formatWorkspaceEntrySize,
@@ -165,6 +169,7 @@ export function createWorkspacePanel(
   const previewActions = document.querySelector("#workspace-preview-actions") as HTMLElement;
   const previewNotice = document.querySelector("#workspace-preview-notice") as HTMLElement;
   const previewImage = document.querySelector("#workspace-preview-image") as HTMLImageElement;
+  const imageView = document.querySelector("#workspace-image-view") as HTMLElement;
   const markdownPreview = document.querySelector("#workspace-markdown-preview") as HTMLElement;
   const previewCode = document.querySelector("#workspace-preview-code") as HTMLElement;
 
@@ -213,6 +218,18 @@ export function createWorkspacePanel(
   let previewCollapsed = workspacePreviewStartsCollapsed(mode, currentPanelWidth());
   const PREVIEW_WRAP_KEY = "relaycat.workspacePreviewWrap";
   let previewWrapEnabled = localStorage.getItem(PREVIEW_WRAP_KEY) !== "0";
+  // Image preview zoom. `imageZoom` is a scale where 1 means one image pixel
+  // per CSS pixel, so the percentage readout is meaningful; "fit" is a mode,
+  // not a separate value, so resizing the panel can recompute it.
+  const IMAGE_ZOOM_STEP = 1.25;
+  let imageNaturalWidth = 0;
+  let imageNaturalHeight = 0;
+  let imageZoom = 1;
+  let imageFitMode = true;
+  let imageZoomOutBtn: HTMLButtonElement | null = null;
+  let imageZoomPctBtn: HTMLButtonElement | null = null;
+  let imageZoomInBtn: HTMLButtonElement | null = null;
+  let imageFitBtn: HTMLButtonElement | null = null;
   // Per-view UI state, so switching views keeps the user's place instead of
   // rebuilding the tree, the history list and the preview from scratch.
   const collapsedByMode: Partial<Record<WorkspaceMode, boolean>> = {};
@@ -328,14 +345,128 @@ export function createWorkspacePanel(
     attributeFilter: ["hidden"],
   });
 
+  previewImage.addEventListener("load", () => {
+    imageNaturalWidth = previewImage.naturalWidth || 0;
+    imageNaturalHeight = previewImage.naturalHeight || 0;
+    if (!imageNaturalWidth || !imageNaturalHeight) {
+      imageView.hidden = true;
+      previewCode.hidden = false;
+      previewCode.textContent = t("workspace_image_decode_failed");
+      return;
+    }
+    fitImage();
+  });
+  previewImage.addEventListener("error", () => {
+    if (imageView.hidden) return;
+    imageView.hidden = true;
+    previewCode.hidden = false;
+    previewCode.textContent = t("workspace_image_decode_failed");
+  });
+
+  // Ctrl/Cmd + wheel is how desktop browsers report a pinch gesture; plain
+  // wheel keeps scrolling (panning) the image.
+  imageView.addEventListener(
+    "wheel",
+    (event) => {
+      if (imageView.hidden || (!event.ctrlKey && !event.metaKey)) return;
+      event.preventDefault();
+      setImageZoom(imageZoom * Math.exp(-event.deltaY * 0.002), event.clientX, event.clientY);
+    },
+    { passive: false },
+  );
+
+  // WKWebView (the macOS shell) reports the trackpad pinch as Safari-style
+  // gesture events instead of ctrl+wheel. preventDefault also stops the web
+  // view from magnifying the whole page.
+  let imageGestureBase = 1;
+  imageView.addEventListener("gesturestart", (event: Event) => {
+    if (imageView.hidden) return;
+    event.preventDefault();
+    imageGestureBase = imageZoom;
+  });
+  imageView.addEventListener("gesturechange", (event: Event) => {
+    if (imageView.hidden) return;
+    event.preventDefault();
+    const scale = (event as Event & { scale?: number }).scale;
+    if (typeof scale === "number" && Number.isFinite(scale)) {
+      setImageZoom(imageGestureBase * scale);
+    }
+  });
+  imageView.addEventListener("gestureend", (event: Event) => {
+    if (imageView.hidden) return;
+    event.preventDefault();
+  });
+
+  imageView.addEventListener("dblclick", () => {
+    if (imageView.hidden) return;
+    // Double-click toggles between "fit the window" and actual pixels.
+    if (imageFitMode || imageZoom < 0.999) setImageZoom(1);
+    else fitImage();
+  });
+
+  // Mouse users pan by dragging once the image overflows; trackpads can also
+  // use the native two-finger scroll.
+  let imagePan: { pointerId: number; x: number; y: number; left: number; top: number } | null =
+    null;
+  imageView.addEventListener("pointerdown", (event) => {
+    if (imageView.hidden || event.button !== 0 || !imageCanPan()) return;
+    imagePan = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      left: imageView.scrollLeft,
+      top: imageView.scrollTop,
+    };
+    imageView.classList.add("panning");
+    imageView.setPointerCapture(event.pointerId);
+  });
+  imageView.addEventListener("pointermove", (event) => {
+    if (!imagePan || event.pointerId !== imagePan.pointerId) return;
+    imageView.scrollLeft = imagePan.left - (event.clientX - imagePan.x);
+    imageView.scrollTop = imagePan.top - (event.clientY - imagePan.y);
+  });
+  const finishImagePan = (event: PointerEvent) => {
+    if (!imagePan || event.pointerId !== imagePan.pointerId) return;
+    imagePan = null;
+    imageView.classList.remove("panning");
+    if (imageView.hasPointerCapture(event.pointerId)) {
+      imageView.releasePointerCapture(event.pointerId);
+    }
+  };
+  imageView.addEventListener("pointerup", finishImagePan);
+  imageView.addEventListener("pointercancel", finishImagePan);
+  imageView.addEventListener("keydown", (event) => {
+    if (imageView.hidden) return;
+    if (event.key === "+" || event.key === "=") {
+      event.preventDefault();
+      setImageZoom(imageZoom * IMAGE_ZOOM_STEP);
+    } else if (event.key === "-" || event.key === "_") {
+      event.preventDefault();
+      setImageZoom(imageZoom / IMAGE_ZOOM_STEP);
+    } else if (event.key === "0") {
+      event.preventDefault();
+      fitImage();
+    } else if (event.key === "1") {
+      event.preventDefault();
+      setImageZoom(1);
+    }
+  });
+
+  // Fit mode follows the available space when the panel or preview is resized.
+  new ResizeObserver(() => {
+    if (imageView.hidden || !imageFitMode || !imageNaturalWidth) return;
+    if (imageView.clientWidth === 0) return;
+    imageZoom = currentFitScale();
+    applyImageSize();
+  }).observe(imageView);
+
   function clearPreview() {
     resetMarkdownPreview();
     resetDeveloperPreview();
     previewTitle.textContent = t("workspace_preview");
     previewNotice.textContent = "";
     previewNotice.classList.remove("show");
-    previewImage.hidden = true;
-    previewImage.removeAttribute("src");
+    hideImagePreview();
     markdownPreview.hidden = true;
     markdownPreview.innerHTML = "";
     previewCode.hidden = false;
@@ -600,6 +731,122 @@ export function createWorkspacePanel(
     }
   }
 
+  function hideImagePreview() {
+    imageView.hidden = true;
+    imageView.classList.remove("pannable", "panning");
+    previewImage.removeAttribute("src");
+    previewImage.style.width = "";
+    previewImage.style.height = "";
+    imageNaturalWidth = 0;
+    imageNaturalHeight = 0;
+    imageZoom = 1;
+    imageFitMode = true;
+  }
+
+  /** Usable area inside the padded scroll container. */
+  function imageViewportSize() {
+    const style = getComputedStyle(imageView);
+    const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    return {
+      width: Math.max(1, imageView.clientWidth - paddingX),
+      height: Math.max(1, imageView.clientHeight - paddingY),
+    };
+  }
+
+  /** Scale that shows the whole image in the current viewport. */
+  function currentFitScale() {
+    if (!imageNaturalWidth || !imageNaturalHeight) return 1;
+    const { width, height } = imageViewportSize();
+    return imageFitScale(imageNaturalWidth, imageNaturalHeight, width, height);
+  }
+
+  function updateImageActions() {
+    if (!imageZoomPctBtn || !imageZoomOutBtn || !imageZoomInBtn || !imageFitBtn) return;
+    imageZoomPctBtn.textContent = `${Math.round(imageZoom * 100)}%`;
+    imageZoomPctBtn.title = imageNaturalWidth
+      ? t("workspace_image_actual_size_hint", imageNaturalWidth, imageNaturalHeight)
+      : t("workspace_image_actual_size");
+    imageZoomOutBtn.disabled = imageZoom <= IMAGE_MIN_ZOOM + 0.001;
+    imageZoomInBtn.disabled = imageZoom >= IMAGE_MAX_ZOOM - 0.001;
+    imageFitBtn.classList.toggle("active", imageFitMode);
+  }
+
+  function applyImageSize() {
+    if (!imageNaturalWidth) return;
+    previewImage.style.width = `${Math.max(1, Math.round(imageNaturalWidth * imageZoom))}px`;
+    previewImage.style.height = `${Math.max(1, Math.round(imageNaturalHeight * imageZoom))}px`;
+    imageView.classList.toggle("pannable", imageCanPan());
+    updateImageActions();
+  }
+
+  function imageCanPan() {
+    return (
+      imageView.scrollWidth > imageView.clientWidth + 1 ||
+      imageView.scrollHeight > imageView.clientHeight + 1
+    );
+  }
+
+  /**
+   * Sets the zoom while keeping the image point under the anchor fixed, so
+   * pinch/wheel zoom behaves like a map instead of jumping to the center.
+   * Anchors are viewport client coordinates; omitted means image center.
+   */
+  function setImageZoom(next: number, anchorX?: number, anchorY?: number) {
+    if (!imageNaturalWidth) return;
+    const clamped = clampImageZoom(next);
+    if (!imageFitMode && Math.abs(clamped - imageZoom) < 0.0001) return;
+    const before = previewImage.getBoundingClientRect();
+    const x = anchorX ?? before.left + before.width / 2;
+    const y = anchorY ?? before.top + before.height / 2;
+    const fractionX = before.width > 0 ? (x - before.left) / before.width : 0.5;
+    const fractionY = before.height > 0 ? (y - before.top) / before.height : 0.5;
+    imageZoom = clamped;
+    imageFitMode = false;
+    applyImageSize();
+    const after = previewImage.getBoundingClientRect();
+    imageView.scrollLeft += after.left + fractionX * after.width - x;
+    imageView.scrollTop += after.top + fractionY * after.height - y;
+  }
+
+  function fitImage() {
+    if (!imageNaturalWidth) return;
+    imageFitMode = true;
+    imageZoom = currentFitScale();
+    imageView.scrollLeft = 0;
+    imageView.scrollTop = 0;
+    applyImageSize();
+  }
+
+  function renderImageActions() {
+    previewActions.innerHTML = "";
+    const group = document.createElement("div");
+    group.className = "ws-image-zoom";
+    const add = (label: string, title: string, onclick: () => void) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ws-small-btn";
+      button.textContent = label;
+      button.title = title;
+      button.onclick = onclick;
+      group.appendChild(button);
+      return button;
+    };
+    imageZoomOutBtn = add("−", t("workspace_image_zoom_out"), () =>
+      setImageZoom(imageZoom / IMAGE_ZOOM_STEP),
+    );
+    imageZoomPctBtn = add("100%", t("workspace_image_actual_size"), () => setImageZoom(1));
+    imageZoomPctBtn.classList.add("ws-image-zoom-pct");
+    imageZoomInBtn = add("+", t("workspace_image_zoom_in"), () =>
+      setImageZoom(imageZoom * IMAGE_ZOOM_STEP),
+    );
+    imageFitBtn = add(t("workspace_image_fit"), t("workspace_image_fit_hint"), () =>
+      fitImage(),
+    );
+    previewActions.appendChild(group);
+    updateImageActions();
+  }
+
   function renderPreview(
     title: string,
     preview: FilePreview,
@@ -610,8 +857,7 @@ export function createWorkspacePanel(
     resetDeveloperPreview();
     previewActions.innerHTML = "";
     previewTitle.textContent = title;
-    previewImage.hidden = true;
-    previewImage.removeAttribute("src");
+    hideImagePreview();
     previewCode.hidden = false;
     previewCode.innerHTML = "";
     let notice = "";
@@ -624,8 +870,15 @@ export function createWorkspacePanel(
     if (notice) return;
     if (preview.kind === "image") {
       previewCode.hidden = true;
+      imageNaturalWidth = 0;
+      imageNaturalHeight = 0;
+      imageFitMode = true;
+      imageZoom = 1;
+      imageView.hidden = false;
+      imageView.scrollLeft = 0;
+      imageView.scrollTop = 0;
+      renderImageActions();
       previewImage.src = preview.content;
-      previewImage.hidden = false;
       return;
     }
     if (!preview.content) {
@@ -666,8 +919,7 @@ export function createWorkspacePanel(
     previewTitle.textContent = title;
     previewNotice.textContent = "";
     previewNotice.classList.remove("show");
-    previewImage.hidden = true;
-    previewImage.removeAttribute("src");
+    hideImagePreview();
     previewCode.hidden = false;
     previewCode.textContent = t("workspace_loading");
     if (isMarkdownPreviewPath(sourcePath)) renderMarkdownActions(false);

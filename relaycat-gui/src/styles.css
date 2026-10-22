@@ -1841,20 +1841,48 @@ body.ws-preview-resizing .ws-preview-resizer::after {
 .ws-preview-code[hidden] {
   display: none;
 }
+.ws-image-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.ws-image-view[hidden] {
+  display: none;
+}
+.ws-image-view:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ws-image-view.pannable {
+  cursor: grab;
+}
+.ws-image-view.panning {
+  cursor: grabbing;
+}
+.ws-image-view.panning .ws-preview-image {
+  pointer-events: none;
+}
+/* Scroll container + centered canvas: the stage grows with the image so
+   scrolling works in both directions, and stays at least viewport-sized so a
+   small image is still centered. */
+.ws-image-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+}
 .ws-preview-image {
   display: block;
-  flex: 1;
-  min-height: 0;
-  max-width: 100%;
-  max-height: 100%;
-  margin: auto;
-  padding: 14px;
-  object-fit: contain;
+  flex: none;
   user-select: none;
   -webkit-user-select: none;
-}
-.ws-preview-image[hidden] {
-  display: none;
+  -webkit-user-drag: none;
 }
 .ws-markdown-preview {
   flex: 1;
@@ -2028,6 +2056,20 @@ body.ws-preview-resizing .ws-preview-resizer::after {
   gap: 3px;
 }
 .ws-markdown-toggle .active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.ws-image-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.ws-image-zoom-pct {
+  min-width: 48px;
+  font-variant-numeric: tabular-nums;
+}
+.ws-image-zoom .active {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-soft);

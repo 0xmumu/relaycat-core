@@ -229,7 +229,11 @@
               </div>
               <div class="ws-preview-actions" id="workspace-preview-actions"></div>
               <div class="ws-preview-notice" id="workspace-preview-notice"></div>
-              <img class="ws-preview-image" id="workspace-preview-image" alt="" hidden />
+              <div class="ws-image-view" id="workspace-image-view" tabindex="0" role="group" aria-label="图片预览" data-i18n-aria-label="workspace_image_preview" hidden>
+                <div class="ws-image-stage">
+                  <img class="ws-preview-image" id="workspace-preview-image" alt="" draggable="false" />
+                </div>
+              </div>
               <div class="ws-markdown-preview" id="workspace-markdown-preview" hidden></div>
               <pre class="ws-preview-code" id="workspace-preview-code"></pre>
             </section>
