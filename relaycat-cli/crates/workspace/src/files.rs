@@ -203,8 +203,23 @@ fn is_known_unsupported_binary(path: &Path) -> bool {
     )
 }
 
+/// Largest source image we are willing to decode just to build a thumbnail.
+/// Anything bigger is returned as-is (the caller already capped the file at
+/// `IMAGE_PREVIEW_LIMIT`), so a decompression bomb can never make the CLI
+/// allocate hundreds of megabytes on a phone's request.
+const THUMBNAIL_SOURCE_MAX_SIDE: u32 = 8192;
+const THUMBNAIL_DECODE_ALLOC_LIMIT: u64 = 64 * 1024 * 1024;
+
 fn thumbnail_jpeg(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
-    let decoded = image::load_from_memory(bytes).ok()?;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(THUMBNAIL_SOURCE_MAX_SIDE);
+    limits.max_image_height = Some(THUMBNAIL_SOURCE_MAX_SIDE);
+    limits.max_alloc = Some(THUMBNAIL_DECODE_ALLOC_LIMIT);
+    reader.limits(limits);
+    let decoded = reader.decode().ok()?;
     let resized = decoded.resize(512, 512, image::imageops::FilterType::Lanczos3);
     let width = resized.width();
     let height = resized.height();
@@ -293,4 +308,31 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         index += length;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let image = image::RgbImage::from_pixel(width, height, image::Rgb([9, 9, 9]));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .expect("encode png");
+        bytes
+    }
+
+    #[test]
+    fn thumbnails_refuse_oversized_sources_instead_of_decoding_them() {
+        // 9000×1 is cheap to build but exceeds the 8192px decode guard.
+        assert!(thumbnail_jpeg(&png(9000, 1)).is_none());
+    }
+
+    #[test]
+    fn normal_images_still_get_a_jpeg_thumbnail() {
+        let (thumbnail, width, height) = thumbnail_jpeg(&png(600, 400)).expect("thumbnail");
+        assert!(width <= 512 && height <= 512);
+        assert!(thumbnail.starts_with(&[0xff, 0xd8]), "must be a JPEG");
+    }
 }
