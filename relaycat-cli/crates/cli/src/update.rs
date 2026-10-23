@@ -28,9 +28,12 @@ const OFFICIAL_MANIFEST_HOSTS: [&str; 2] = ["www.relaycat.cn", "relaycat.app"];
 ///
 /// While it is empty, TLS to the official host plus the SHA-256 check are the
 /// only anchors, and self-replacement is refused for any non-official
-/// manifest. Set this constant (and sign `downloads[].sha256`) to make the
-/// update chain verifiable end to end.
-const CLI_UPDATE_PUBLIC_KEY: &str = "";
+/// The release pipeline must set `RELAYCAT_CLI_UPDATE_PUBLIC_KEY` to the
+/// base64 Ed25519 public key.
+const CLI_UPDATE_PUBLIC_KEY: &str = match option_env!("RELAYCAT_CLI_UPDATE_PUBLIC_KEY") {
+    Some(key) => key,
+    None => "",
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CliUpdateManifest {
