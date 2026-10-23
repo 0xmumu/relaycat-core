@@ -1120,22 +1120,21 @@ async fn handle_socket(
     // treat this frame as the authoritative "admitted" signal instead of the
     // timing-based rejection probe. Sent directly on the socket before the
     // outbound queue is drained, so it precedes any PeerJoined notification.
-    if supports_join_accepted {
-        if let Ok(bytes) = encode_frame(&OuterFrame::JoinAccepted) {
-            if socket.send(Message::Binary(bytes.into())).await.is_err() {
-                state.hub.leave(&query.room_id, query.role, conn_id);
-                relaycat_log(
-                    "WARN",
-                    rejected_log(
-                        &query.room_id,
-                        query.role,
-                        conn_id,
-                        "failed to send join_accepted",
-                    ),
-                );
-                return;
-            }
-        }
+    if supports_join_accepted
+        && let Ok(bytes) = encode_frame(&OuterFrame::JoinAccepted)
+        && socket.send(Message::Binary(bytes.into())).await.is_err()
+    {
+        state.hub.leave(&query.room_id, query.role, conn_id);
+        relaycat_log(
+            "WARN",
+            rejected_log(
+                &query.room_id,
+                query.role,
+                conn_id,
+                "failed to send join_accepted",
+            ),
+        );
+        return;
     }
 
     relaycat_log("INFO", connected_log(&query.room_id, query.role, conn_id));
@@ -1541,7 +1540,7 @@ fn encode_outbound_frame(frame: &OuterFrame) -> anyhow::Result<Vec<u8>> {
     if !binary_frame_within_limit(bytes.len(), MAX_BINARY_FRAME_BYTES) {
         relaycat_log(
             "WARN",
-            &format!(
+            format!(
                 "relay: refusing oversized outbound frame bytes={}",
                 bytes.len()
             ),

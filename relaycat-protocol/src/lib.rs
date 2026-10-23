@@ -938,7 +938,7 @@ fn messagepack_binary_encoded_len(len: usize) -> usize {
     } else {
         return usize::MAX;
     };
-    prefix_len.checked_add(len).unwrap_or(usize::MAX)
+    prefix_len.saturating_add(len)
 }
 
 #[derive(Serialize)]

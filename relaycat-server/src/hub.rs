@@ -391,8 +391,9 @@ impl Hub {
     }
 
     pub fn leave(&self, room_id: &str, role: Role, conn_id: ConnId) {
-        if let Some(mut room) = self.rooms.get_mut(room_id) {
-            if room.matches(role, conn_id) {
+        if let Some(mut room) = self.rooms.get_mut(room_id)
+            && room.matches(role, conn_id)
+        {
                 let peer = (role == Role::Cli)
                     .then(|| room.peer_for(role).cloned())
                     .flatten();
@@ -424,7 +425,6 @@ impl Hub {
                     }
                 }
             }
-        }
 
         // Use remove_if rather than a separate remove(): between releasing the
         // get_mut() lock above and calling remove(), a new peer could have
