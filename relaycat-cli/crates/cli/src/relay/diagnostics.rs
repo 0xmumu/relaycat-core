@@ -117,8 +117,38 @@ pub(crate) fn terminal_input_diagnostic_line(
         "terminal_input_diag kind={session_kind} stream={input_stream_id} input_seq={input_seq} decision={decision:?} bytes={} control={} raw_preview={}",
         bytes.len(),
         terminal_input_control_name(bytes),
-        format_byte_preview(bytes),
+        format_input_preview(bytes),
     )
+}
+
+/// Preview of terminal **input** bytes for the diagnostic log.
+///
+/// Input bugs are about escape sequences, so those are shown verbatim. Text
+/// that looks typed is masked instead: the same log line would otherwise
+/// record passwords and tokens entered at a prompt (`RELAYCAT_TERMINAL_DEBUG`
+/// also turns this on for interactive agents).
+fn format_input_preview(bytes: &[u8]) -> String {
+    const MAX_PREVIEW_BYTES: usize = 32;
+
+    if bytes.is_empty() {
+        return "-".to_string();
+    }
+    let escape_sequence = bytes.first() == Some(&0x1b);
+    let mut preview = String::new();
+    for (index, byte) in bytes.iter().take(MAX_PREVIEW_BYTES).enumerate() {
+        if index > 0 {
+            preview.push(' ');
+        }
+        if escape_sequence || !(0x20..=0x7e).contains(byte) {
+            preview.push_str(&format!("{byte:02X}"));
+        } else {
+            preview.push_str("..");
+        }
+    }
+    if bytes.len() > MAX_PREVIEW_BYTES {
+        preview.push_str(" ...");
+    }
+    preview
 }
 
 pub(crate) fn terminal_input_control_name(bytes: &[u8]) -> &'static str {
@@ -170,4 +200,37 @@ pub(crate) fn terminal_output_control_diagnostics(
         index += final_offset + 1;
     }
     diagnostics
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_text_is_never_logged_verbatim() {
+        let preview = format_input_preview(b"hunter2");
+        assert!(!preview.contains('h') && !preview.contains('2'));
+        assert_eq!(preview.matches("..").count(), 7);
+    }
+
+    #[test]
+    fn escape_sequences_stay_readable_for_input_debugging() {
+        // Arrow up and an SGR mouse wheel report.
+        assert_eq!(format_input_preview(b"[A"), "1B 5B 41");
+        let wheel = format_input_preview(b"[<64;10;5M");
+        assert!(wheel.starts_with("1B 5B 3C"));
+    }
+
+    #[test]
+    fn the_log_line_masks_typed_characters() {
+        let line = terminal_input_diagnostic_line(
+            "claude",
+            "stdin",
+            7,
+            b"correct horse battery",
+            InputDecision::Accept,
+        );
+        assert!(line.contains("bytes=21"));
+        assert!(!line.contains("correct"));
+    }
 }

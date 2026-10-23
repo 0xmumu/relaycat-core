@@ -40,11 +40,7 @@ pub(crate) fn init_log_file(project_dir: &Path) -> Option<PathBuf> {
     if fs::metadata(&path).map(|m| m.len()).unwrap_or(0) >= log_max_bytes() {
         rotate_log_file(&path);
     }
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok()?;
+    let file = open_log_file(&path).ok()?;
     let bytes_written = file.metadata().map(|m| m.len()).unwrap_or(0);
     LOG_FILE
         .set(Mutex::new(LogSink {
@@ -54,6 +50,25 @@ pub(crate) fn init_log_file(project_dir: &Path) -> Option<PathBuf> {
         }))
         .ok()?;
     Some(path)
+}
+
+/// Opens (and tightens) the live log. Used for the first open and every
+/// rotation, so no code path can create a group/world-readable log.
+fn open_log_file(path: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(file)
 }
 
 /// Rename the live log aside and hand it to a background thread that gzips it
@@ -104,6 +119,12 @@ fn compress_log_archive(archive: &Path) {
     let Ok(output) = File::create(&gz_path) else {
         return;
     };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // The archive keeps the same content as the live log.
+        let _ = fs::set_permissions(&gz_path, fs::Permissions::from_mode(0o600));
+    }
     let mut encoder = GzEncoder::new(output, Compression::default());
     if io::copy(&mut input, &mut encoder).is_err() || encoder.finish().is_err() {
         let _ = fs::remove_file(&gz_path);
@@ -183,11 +204,7 @@ pub(crate) fn relaycat_log(level: &str, message: impl AsRef<str>) {
         // pruning happen on a background thread) and continue in a fresh file.
         let live_path = sink.path.clone();
         rotate_log_file(&live_path);
-        if let Ok(file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&sink.path)
-        {
+        if let Ok(file) = open_log_file(&sink.path) {
             sink.file = file;
             sink.bytes_written = 0;
         }
@@ -283,5 +300,34 @@ pub(crate) fn local_timestamp() -> String {
         unsafe { CStr::from_ptr(buffer.as_ptr()) }
             .to_string_lossy()
             .into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_files_are_created_owner_only() {
+        let dir = std::env::temp_dir().join(format!(
+            "relaycat-log-perms-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cli.log");
+        let _file = open_log_file(&path).expect("open log");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 }
