@@ -89,8 +89,13 @@ impl FileService {
         let mut scanned = 0usize;
         let mut scan_capped = false;
 
-        while let Some((directory, logical_directory)) = pending.pop() {
-            let canonical_directory = match directory.canonicalize() {
+    while let Some((directory, logical_directory)) = pending.pop() {
+        // A Cancel for this request aborts the walk between directories
+        // instead of scanning the whole tree first.
+        if crate::git::cancel_requested() {
+            return Err(WorkspaceServiceError::cancelled());
+        }
+        let canonical_directory = match directory.canonicalize() {
                 Ok(path) if path.starts_with(self.root.path()) => path,
                 _ => continue,
             };
@@ -155,7 +160,7 @@ impl FileService {
             path,
             metadata.len(),
             limits.database,
-        ) {
+        )? {
             return Ok(preview);
         }
         if is_known_unsupported_binary(&resolved) {

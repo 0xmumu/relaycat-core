@@ -1,6 +1,8 @@
+use crate::WorkspaceServiceError;
+use crate::security::{ensure_regular_file, open_without_following_symlinks};
 use relaycat_protocol::{DatabaseColumn, DatabaseObject, FilePreview};
 use rusqlite::{Connection, OpenFlags};
-use std::{fs::File, io::Read, path::Path};
+use std::{io::Read, path::Path};
 
 pub const DATABASE_PREVIEW_SOURCE_LIMIT: u64 = 64 * 1024 * 1024;
 pub const DATABASE_PREVIEW_OBJECT_LIMIT: usize = 50;
@@ -9,22 +11,32 @@ const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 pub(crate) fn has_sqlite_header(path: &Path) -> bool {
     let mut header = [0_u8; SQLITE_HEADER.len()];
-    File::open(path)
-        .and_then(|mut file| file.read_exact(&mut header))
+    open_without_following_symlinks(path)
+        .and_then(|mut file| file.read_exact(&mut header).map_err(WorkspaceServiceError::io))
         .map(|_| &header == SQLITE_HEADER)
         .unwrap_or(false)
 }
 
-pub(crate) fn preview(path: &Path, display_path: &str, size: u64, limit: u64) -> Option<FilePreview> {
-    if !has_sqlite_header(path) { return None; }
+pub(crate) fn preview(
+    path: &Path,
+    display_path: &str,
+    size: u64,
+    limit: u64,
+) -> Result<Option<FilePreview>, WorkspaceServiceError> {
+    if !has_sqlite_header(path) { return Ok(None); }
     if size > limit {
-        return Some(FilePreview::TooLarge {
+        return Ok(Some(FilePreview::TooLarge {
             path: display_path.to_string(),
             size,
             limit,
-        });
+        }));
     }
-    inspect(path, display_path, size).ok()
+    // rusqlite opens by path (URI) and cannot take a pre-opened handle, so a
+    // symlink swapped in after the canonicalize pass is caught by this lstat
+    // re-check; the header read above already went through the O_NOFOLLOW
+    // handle.
+    ensure_regular_file(path)?;
+    Ok(inspect(path, display_path, size).ok())
 }
 
 fn inspect(path: &Path, display_path: &str, size: u64) -> rusqlite::Result<FilePreview> {

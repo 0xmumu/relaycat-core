@@ -679,28 +679,6 @@ fn process_exit_msg_uses_real_exit_code() {
 }
 
 #[test]
-fn relay_wire_guard_checks_final_outer_frame_bytes() {
-    let small = OuterFrame::Data {
-        room_id: "room-1".to_string(),
-        direction: Direction::CliToApp,
-        seq: 1,
-        nonce: [0; 12],
-        ciphertext: vec![0; 16],
-    };
-    assert!(encode_relay_frame_bytes(&small).is_ok());
-
-    let oversized = OuterFrame::Data {
-        room_id: "room-1".to_string(),
-        direction: Direction::CliToApp,
-        seq: 1,
-        nonce: [0; 12],
-        ciphertext: vec![0; relaycat_protocol::MAX_OUTER_FRAME_BYTES],
-    };
-    let error = encode_relay_frame_bytes(&oversized).expect_err("frame should exceed wire limit");
-    assert!(error.to_string().contains("exceeds"));
-}
-
-#[test]
 fn relay_websocket_config_caps_inbound_message_and_frame_bytes() {
     let config = relay_websocket_config();
 

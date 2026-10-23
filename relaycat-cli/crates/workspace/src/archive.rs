@@ -1,8 +1,9 @@
 use crate::WorkspaceServiceError;
+use crate::security::{ensure_regular_file, open_without_following_symlinks};
 use flate2::read::GzDecoder;
 use relaycat_protocol::{ArchiveEntry, FilePreview, WORKSPACE_ARCHIVE_ENTRY_LIMIT};
 use std::{
-    fs::{self, File},
+    fs,
     io::{BufReader, Read, Seek, SeekFrom},
     path::{Component, Path},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -37,6 +38,7 @@ impl ArchiveKind {
 
 pub fn preview(path: &Path, relative_path: &str, source_size: u64) -> Result<Option<FilePreview>, WorkspaceServiceError> {
     let Some(kind) = ArchiveKind::detect(path) else { return Ok(None) };
+    if crate::git::cancel_requested() { return Err(WorkspaceServiceError::cancelled()); }
     if !matches!(kind, ArchiveKind::Gz) && source_size > ARCHIVE_PREVIEW_SOURCE_LIMIT {
         return Ok(Some(FilePreview::TooLarge {
             path: relative_path.to_string(),
@@ -46,10 +48,12 @@ pub fn preview(path: &Path, relative_path: &str, source_size: u64) -> Result<Opt
     }
     let (entries, has_more) = match kind {
         ArchiveKind::Zip => zip_entries(path)?,
-        ArchiveKind::SevenZ => sevenz_entries(path)?,
-        ArchiveKind::Tar => tar_entries(BufReader::new(File::open(path).map_err(WorkspaceServiceError::io)?))?,
+        // sevenz only opens by path, so the symlink check is the lstat one;
+        // every other format gets a handle opened with O_NOFOLLOW.
+        ArchiveKind::SevenZ => { ensure_regular_file(path)?; sevenz_entries(path)? }
+        ArchiveKind::Tar => tar_entries(BufReader::new(open_without_following_symlinks(path)?))?,
         ArchiveKind::TarGz | ArchiveKind::Tgz => {
-            let file = File::open(path).map_err(WorkspaceServiceError::io)?;
+            let file = open_without_following_symlinks(path)?;
             tar_entries(GzDecoder::new(BufReader::new(file)).take(ARCHIVE_SCAN_LIMIT))?
         }
         ArchiveKind::Gz => (vec![gzip_entry(path)?], false),
@@ -63,13 +67,16 @@ pub fn preview(path: &Path, relative_path: &str, source_size: u64) -> Result<Opt
 }
 
 fn zip_entries(path: &Path) -> Result<(Vec<ArchiveEntry>, bool), WorkspaceServiceError> {
-    let file = File::open(path).map_err(WorkspaceServiceError::io)?;
+    let file = open_without_following_symlinks(path)?;
     let mut archive = zip::ZipArchive::new(file).map_err(|_| invalid_archive())?;
     let mut entries = Vec::new();
     let deadline = Instant::now() + ARCHIVE_PARSE_DEADLINE;
     let mut has_more = false;
     for index in 0..archive.len() {
-        if Instant::now() > deadline { has_more = true; break; }
+        if Instant::now() > deadline || crate::git::cancel_requested() {
+            has_more = true;
+            break;
+        }
         let file = archive.by_index_raw(index).map_err(|_| invalid_archive())?;
         let Some(path) = safe_entry_path(file.name()) else { continue };
         if entries.len() == WORKSPACE_ARCHIVE_ENTRY_LIMIT { has_more = true; break; }
@@ -89,7 +96,10 @@ fn sevenz_entries(path: &Path) -> Result<(Vec<ArchiveEntry>, bool), WorkspaceSer
     let mut has_more = false;
     let deadline = Instant::now() + ARCHIVE_PARSE_DEADLINE;
     for file in archive.files {
-        if Instant::now() > deadline { has_more = true; break; }
+        if Instant::now() > deadline || crate::git::cancel_requested() {
+            has_more = true;
+            break;
+        }
         let Some(path) = safe_entry_path(&file.name) else { continue };
         if entries.len() == WORKSPACE_ARCHIVE_ENTRY_LIMIT { has_more = true; break; }
         let modified_unix_seconds = file.has_last_modified_date.then(|| SystemTime::from(file.last_modified_date))
@@ -106,7 +116,10 @@ fn tar_entries<R: Read>(reader: R) -> Result<(Vec<ArchiveEntry>, bool), Workspac
     let deadline = Instant::now() + ARCHIVE_PARSE_DEADLINE;
     let stream = archive.entries().map_err(|_| invalid_archive())?;
     for result in stream {
-        if Instant::now() > deadline { has_more = true; break; }
+        if Instant::now() > deadline || crate::git::cancel_requested() {
+            has_more = true;
+            break;
+        }
         let entry = match result {
             Ok(entry) => entry,
             Err(_) if !entries.is_empty() => { has_more = true; break; }
@@ -127,7 +140,7 @@ fn tar_entries<R: Read>(reader: R) -> Result<(Vec<ArchiveEntry>, bool), Workspac
 }
 
 fn gzip_entry(path: &Path) -> Result<ArchiveEntry, WorkspaceServiceError> {
-    let file = File::open(path).map_err(WorkspaceServiceError::io)?;
+    let file = open_without_following_symlinks(path)?;
     let decoder = GzDecoder::new(BufReader::new(file));
     let header = decoder.header().ok_or_else(invalid_archive)?;
     let fallback = path.file_stem().and_then(|value| value.to_str()).unwrap_or("compressed-file");
@@ -145,7 +158,7 @@ fn gzip_entry(path: &Path) -> Result<ArchiveEntry, WorkspaceServiceError> {
 }
 
 fn gzip_uncompressed_size(path: &Path) -> Result<u64, WorkspaceServiceError> {
-    let mut file = File::open(path).map_err(WorkspaceServiceError::io)?;
+    let mut file = open_without_following_symlinks(path)?;
     if fs::metadata(path).map_err(WorkspaceServiceError::io)?.len() < 4 { return Err(invalid_archive()); }
     file.seek(SeekFrom::End(-4)).map_err(WorkspaceServiceError::io)?;
     let mut trailer = [0u8; 4];

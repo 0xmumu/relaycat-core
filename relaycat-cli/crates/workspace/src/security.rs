@@ -91,6 +91,22 @@ impl ProjectRoot {
     }
 }
 
+/// Confirms `path` is a regular file and not a symlink, via `lstat`
+/// (`symlink_metadata` does not follow the final component).
+///
+/// Used before opening a file through a path-based API that cannot take a
+/// pre-opened handle (rusqlite, sevenz): a symlink swapped in after
+/// [`ProjectRoot::resolve`] canonicalized is rejected here instead of being
+/// silently followed. This narrows the check/use window that
+/// [`open_without_following_symlinks`] closes completely.
+pub(crate) fn ensure_regular_file(path: &Path) -> Result<(), WorkspaceServiceError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(WorkspaceServiceError::io)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(WorkspaceServiceError::invalid("path is not a regular file"));
+    }
+    Ok(())
+}
+
 /// Opens an already-canonical path without following a symlink in its last
 /// component.
 ///

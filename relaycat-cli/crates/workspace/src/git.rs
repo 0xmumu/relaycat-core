@@ -50,7 +50,11 @@ pub(crate) fn enter_cancel_scope(flag: Arc<AtomicBool>) -> CancelScope {
 }
 
 /// True once the app cancelled the request running on this thread.
-fn cancel_requested() -> bool {
+///
+/// Cooperative cancellation for long in-process work (directory search,
+/// archive parsing): checked between units so a Cancel aborts within one unit
+/// instead of only killing git children.
+pub(crate) fn cancel_requested() -> bool {
     ACTIVE_CANCEL.with(|slot| {
         slot.borrow()
             .as_ref()

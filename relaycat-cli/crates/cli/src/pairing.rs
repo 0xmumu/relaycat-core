@@ -174,6 +174,11 @@ pub fn write_pairing_qr_png(material: &PairingMaterial, path: &Path) -> Result<(
         .light_color(Luma([255]))
         .build();
 
+    // The QR embeds the pairing URL (i.e. the token). `image::save` creates
+    // the file with the default umask, so pre-create it owner-only: the
+    // truncate-and-write that follows keeps the 0600 mode on Unix, and
+    // `restrict_to_owner` in the caller still tightens anything pre-existing.
+    crate::private_fs::create_private_file(path)?;
     image
         .save(path)
         .with_context(|| format!("failed to write pairing QR PNG {}", path.display()))

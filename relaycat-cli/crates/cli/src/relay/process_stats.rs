@@ -6,16 +6,6 @@ pub(crate) fn process_exit_msg(status: &ExitStatus) -> PlainMsg {
     }
 }
 
-pub(crate) fn encode_relay_frame_bytes(frame: &OuterFrame) -> Result<Vec<u8>> {
-    let bytes = encode_frame(frame).context("failed to encode relay frame")?;
-    anyhow::ensure!(
-        bytes.len() <= MAX_OUTER_FRAME_BYTES,
-        "encoded relay frame exceeds {MAX_OUTER_FRAME_BYTES} bytes: {}",
-        bytes.len()
-    );
-    Ok(bytes)
-}
-
 pub(crate) fn collect_cli_status(pid: Option<u32>, process_name: &str) -> CliStatus {
     let (cpu_percent_x10, memory_bytes) =
         read_process_usage(std::process::id(), pid).unwrap_or((0, 0));

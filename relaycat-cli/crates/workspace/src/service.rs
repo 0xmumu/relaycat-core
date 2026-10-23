@@ -50,12 +50,22 @@ pub struct WorkspaceService {
 struct ActiveRequest {
     active: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     request_id: String,
+    flag: Arc<AtomicBool>,
 }
 
 impl Drop for ActiveRequest {
     fn drop(&mut self) {
         if let Ok(mut active) = self.active.lock() {
-            active.remove(&self.request_id);
+            // Only unregister when the table still holds *this* request's
+            // flag: with a duplicated request_id the newest registration wins,
+            // and the older request finishing must not evict the newer one's
+            // cancel flag.
+            if active
+                .get(&self.request_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &self.flag))
+            {
+                active.remove(&self.request_id);
+            }
         }
     }
 }
@@ -232,6 +242,7 @@ impl WorkspaceService {
             ActiveRequest {
                 active: self.active.clone(),
                 request_id: request_id.to_string(),
+                flag: flag.clone(),
             },
             flag,
         )
@@ -393,6 +404,45 @@ mod tests {
 
         // Finishing the request must not leave a stale entry behind.
         drop(guard);
+        assert!(service.active.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_older_request_finishing_does_not_evict_a_newer_registration() {
+        let dir = std::env::temp_dir().join(format!(
+            "relaycat-cancel-dup-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let service = WorkspaceService::new(ProjectRoot::open(&dir).unwrap(), 1);
+
+        // Two in-flight requests sharing one id: the newest registration wins,
+        // so the older one finishing must leave the newer flag registered.
+        let (older_guard, _older_flag) = service.begin_request("dup-request");
+        let (newer_guard, newer_flag) = service.begin_request("dup-request");
+        drop(older_guard);
+
+        let cancel = service.execute(WorkspaceRequestEnvelope {
+            request_id: "cancel-2".into(),
+            project_id: service.project_id().to_string(),
+            deadline_unix_ms: u64::MAX,
+            idempotency_key: None,
+            operation: WorkspaceRequest::Cancel {
+                target_request_id: "dup-request".into(),
+            },
+        });
+        assert!(matches!(cancel.result.unwrap(), WorkspaceResponse::Ack));
+        assert!(
+            newer_flag.load(Ordering::SeqCst),
+            "the newer registration must still receive the Cancel"
+        );
+
+        drop(newer_guard);
         assert!(service.active.lock().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }

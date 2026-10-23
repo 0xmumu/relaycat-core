@@ -77,9 +77,9 @@ fn write_remote_size_osc(cols: u16, rows: u16) {
 }
 
 /// Write the pairing URL to the GUI's poll file (see
-/// [`crate::pairing_store::gui_pairing_url_path`]). Written to a temp sibling
-/// and renamed so the GUI never reads a half-written file. Best-effort: failure
-/// just leaves the GUI on the OSC channel.
+/// [`crate::pairing_store::gui_pairing_url_path`]). The file holds the pairing
+/// token, so it goes through the private atomic writer (0600, never
+/// half-written). Best-effort: failure just leaves the GUI on the OSC channel.
 fn write_gui_pairing_url_file(
     project_dir: &std::path::Path,
     kind: &crate::command::SessionKind,
@@ -91,13 +91,7 @@ fn write_gui_pairing_url_file(
         kind,
         gui_session_id.as_deref(),
     );
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let tmp = path.with_extension("txt.tmp");
-    if std::fs::write(&tmp, url.as_bytes()).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
+    let _ = crate::private_fs::write_private_atomic(&path, url.as_bytes());
 }
 
 /// Pairing-success diagnostic marker. GUI state is published separately over

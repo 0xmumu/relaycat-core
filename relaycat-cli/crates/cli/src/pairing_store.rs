@@ -193,6 +193,9 @@ pub fn write_pairing_qr_pngs(project_dir: &Path, material: &PairingMaterial) -> 
 
     crate::pairing::write_pairing_qr_png(material, &path)?;
     restrict_to_owner(&path, 0o600)?;
+    // `fs::copy` also creates with the default umask; pre-create the fixed
+    // `latest` name owner-only so the copy inherits the mode.
+    crate::private_fs::create_private_file(&latest)?;
     fs::copy(&path, &latest).with_context(|| {
         format!(
             "failed to update latest pairing QR PNG {}",
