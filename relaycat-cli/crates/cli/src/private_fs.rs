@@ -48,6 +48,8 @@ pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         let mut file = options
             .open(&temp)
             .with_context(|| format!("failed to create {}", temp.display()))?;
+        #[cfg(windows)]
+        restrict_to_current_user(&temp)?;
         file.write_all(bytes)
             .with_context(|| format!("failed to write {}", temp.display()))?;
         file.flush()
@@ -90,6 +92,90 @@ pub fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
         let _ = fs::remove_file(&temp);
     }
     write_result
+}
+
+#[cfg(windows)]
+fn restrict_to_current_user(path: &Path) -> Result<()> {
+    use std::{mem, os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, GENERIC_ALL, GetLastError, LocalFree},
+        Security::Authorization::{
+            EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SET_ACCESS, SE_FILE_OBJECT,
+            SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+        },
+        Security::{
+            DACL_SECURITY_INFORMATION, GetTokenInformation, NO_INHERITANCE,
+            PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER, TokenUser,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+
+    unsafe {
+        let mut token = ptr::null_mut();
+        let mut acl = ptr::null_mut();
+        let result = (|| -> Result<()> {
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                anyhow::bail!("OpenProcessToken failed with Windows error {}", GetLastError());
+            }
+
+            let mut required = 0;
+            let _ = GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut required);
+            if required == 0 {
+                anyhow::bail!("GetTokenInformation size query failed with Windows error {}", GetLastError());
+            }
+            let word_count = (required as usize).div_ceil(mem::size_of::<u64>());
+            let mut token_information = vec![0_u64; word_count];
+            if GetTokenInformation(
+                token,
+                TokenUser,
+                token_information.as_mut_ptr().cast(),
+                required,
+                &mut required,
+            ) == 0
+            {
+                anyhow::bail!("GetTokenInformation failed with Windows error {}", GetLastError());
+            }
+            let token_user = &*token_information.as_ptr().cast::<TOKEN_USER>();
+            let mut access: EXPLICIT_ACCESS_W = mem::zeroed();
+            access.grfAccessPermissions = GENERIC_ALL;
+            access.grfAccessMode = SET_ACCESS;
+            access.grfInheritance = NO_INHERITANCE;
+            access.Trustee = TRUSTEE_W {
+                pMultipleTrustee: ptr::null_mut(),
+                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: token_user.User.Sid.cast(),
+            };
+
+            let status = SetEntriesInAclW(1, &access, ptr::null(), &mut acl);
+            if status != 0 {
+                anyhow::bail!("SetEntriesInAclW failed with Windows error {status}");
+            }
+
+            let path_wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let status = SetNamedSecurityInfoW(
+                path_wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                acl,
+                ptr::null_mut(),
+            );
+            if status != 0 {
+                anyhow::bail!("SetNamedSecurityInfoW failed with Windows error {status}");
+            }
+            Ok(())
+        })();
+        if !acl.is_null() {
+            let _ = LocalFree(acl.cast());
+        }
+        if !token.is_null() {
+            let _ = CloseHandle(token);
+        }
+        result
+    }
 }
 
 /// Creates `path` as a fresh owner-only file, replacing whatever was there.
