@@ -10,6 +10,12 @@ pub fn build_ws_url(relay_url: &str, room_id: &str, role: &str) -> String {
         path.push_str("/ws");
     }
 
+    // Encode the values we append: today's room ids are base64url and roles
+    // are fixed strings, but building the query by concatenation meant any
+    // future value containing `&`, `=` or a space would silently add or
+    // rewrite parameters.
+    let room_id = encode_query_value(room_id);
+    let role = encode_query_value(role);
     let mut url = if query.is_empty() {
         format!("{path}?room_id={room_id}&role={role}")
     } else {
@@ -20,6 +26,19 @@ pub fn build_ws_url(relay_url: &str, room_id: &str, role: &str) -> String {
         url.push_str(fragment);
     }
     url
+}
+
+fn encode_query_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
 }
 
 #[cfg(test)]
@@ -55,6 +74,14 @@ mod tests {
         assert_eq!(
             build_ws_url("wss://relay.example.com?token=abc", "room-1", "app"),
             "wss://relay.example.com/ws?token=abc&room_id=room-1&role=app"
+        );
+    }
+
+    #[test]
+    fn encodes_appended_query_values() {
+        assert_eq!(
+            build_ws_url("wss://relay.example.com/ws", "a b&c=d", "cli"),
+            "wss://relay.example.com/ws?room_id=a%20b%26c%3Dd&role=cli"
         );
     }
 }
