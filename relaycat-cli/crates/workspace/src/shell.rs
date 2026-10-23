@@ -55,11 +55,17 @@ impl ShellManager {
     }
 
     pub fn list(&self) -> Vec<ShellDescriptor> {
-        let shells = self.shells.lock().expect("shell map poisoned");
+        // A poisoned lock must degrade to "no shells" instead of panicking:
+        // the release profile builds with `panic = "abort"`, so a panic here
+        // would take down the whole CLI (and the running agent) rather than
+        // failing one workspace request.
+        let Ok(shells) = self.shells.lock() else {
+            return Vec::new();
+        };
         let mut list: Vec<_> = shells
             .values()
             .filter_map(|shell| {
-                let descriptor = shell.descriptor.lock().expect("descriptor poisoned");
+                let descriptor = shell.descriptor.lock().ok()?;
                 (!descriptor.exited).then(|| descriptor.clone())
             })
             .collect();
@@ -507,7 +513,8 @@ fn internal_error(error: impl ToString) -> WorkspaceServiceError {
 
 #[cfg(test)]
 mod tests {
-    use super::{configure_shell_terminal_env, windows_shell_cwd};
+    use super::{ShellManager, configure_shell_terminal_env, windows_shell_cwd};
+    use crate::ProjectRoot;
     #[cfg(windows)]
     use super::default_shell_command;
     use portable_pty::CommandBuilder;
@@ -559,5 +566,20 @@ mod tests {
             windows_shell_cwd(Path::new(r"C:\data\relaycat")),
             Path::new(r"C:\data\relaycat")
         );
+    }
+
+    #[test]
+    fn a_poisoned_shell_map_degrades_to_an_empty_list() {
+        let root = ProjectRoot::open(std::env::temp_dir()).unwrap();
+        let manager = ShellManager::new(root, 1);
+        let shells = manager.shells.clone();
+        // Poison the map exactly the way a panicking thread would.
+        let _ = std::thread::spawn(move || {
+            let _guard = shells.lock().unwrap();
+            panic!("poison the shell map");
+        })
+        .join();
+
+        assert!(manager.list().is_empty());
     }
 }
