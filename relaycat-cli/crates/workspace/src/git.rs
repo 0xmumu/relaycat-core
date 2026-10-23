@@ -265,7 +265,9 @@ impl GitService {
     }
     pub fn apply_patch(&self, patch: &str, cached: bool, reverse: bool) -> Result<GitMutationResult, WorkspaceServiceError> {
         if patch.is_empty() || patch.len() > 2*1024*1024 { return Err(WorkspaceServiceError::invalid("invalid patch size")); }
-        let _guard=self.lock_mutation()?; let mut command=self.command(); command.args(["apply","--recount","--whitespace=nowarn"]); if cached{command.arg("--cached");} if reverse{command.arg("--reverse");}
+        let _guard=self.lock_mutation()?; let mut command=self.command(); command.args(["apply","--recount","--whitespace=nowarn"]);
+        if cached{command.arg("--cached");}
+        if reverse{command.arg("--reverse");}
         let output = run_git_command(command, Some(patch.as_bytes()), DEFAULT_GIT_TIMEOUT)?;
         self.success(&output)?;
         self.mutation_result()
@@ -652,7 +654,7 @@ fn sanitize_git_error_message(raw: &str) -> String {
         match character {
             '\r' => {
                 let _ = chars.next_if_eq(&'\n');
-                if clean.chars().last() != Some('\n') { clean.push('\n'); }
+                if !clean.ends_with('\n') { clean.push('\n'); }
             }
             '\n' | '\t' => clean.push(character),
             value if value.is_control() => {}

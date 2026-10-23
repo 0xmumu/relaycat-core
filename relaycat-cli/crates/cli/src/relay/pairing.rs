@@ -328,10 +328,10 @@ pub async fn prepare_secure_pairing(
     }
     // Always initialise the log file (the GUI tails it for pairing status),
     // but only print its path in interactive (non-GUI) mode.
-    if let Some(log_path) = init_log_file(&project_dir) {
-        if !quiet {
-            eprintln!("\n{}", relaycat_logs_message(&log_path, language));
-        }
+    if let Some(log_path) = init_log_file(&project_dir)
+        && !quiet
+    {
+        eprintln!("\n{}", relaycat_logs_message(&log_path, language));
     }
     let (cli_keypair, material) =
         generate_pairing_material_for_run_attempt(&relay.url, &target.session_kind);

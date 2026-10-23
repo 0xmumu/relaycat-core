@@ -154,7 +154,7 @@ pub(crate) fn prune_log_archives(dir: &Path, retain_days: u64, max_kept: usize) 
         })
         .collect();
     // Newest first; everything past `max_kept` or older than the window goes.
-    archives.sort_by(|a, b| b.1.cmp(&a.1));
+    archives.sort_by_key(|archive| std::cmp::Reverse(archive.1));
     let max_age = Duration::from_secs(retain_days * 24 * 60 * 60);
     for (index, (path, modified)) in archives.iter().enumerate() {
         let expired = now

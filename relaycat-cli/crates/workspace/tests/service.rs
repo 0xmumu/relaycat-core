@@ -81,7 +81,7 @@ fn workspace_service_exposes_shell_transport_to_cli_host() {
     assert!(events.iter().any(|event| matches!(
         event,
         ShellTransportEvent::Output { bytes, .. }
-            if String::from_utf8_lossy(&bytes).contains("service-marker")
+            if String::from_utf8_lossy(bytes).contains("service-marker")
     )));
     assert!(service.drain_events().is_empty(), "raw Shell output must not enter workspace events");
 

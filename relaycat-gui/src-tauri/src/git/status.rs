@@ -95,32 +95,46 @@ pub struct GitDiffStatDto {
     pub unstaged: Vec<GitDiffStatEntryDto>,
 }
 
-/// Parses `git diff --numstat -z` output. Rename records (empty path followed
-/// by the old and new names) are skipped rather than risking a wrong path.
+/// Parses `git diff --numstat -z` output, using the new path for renames.
 fn parse_numstat_z(raw: &[u8]) -> Vec<GitDiffStatEntryDto> {
-    raw.split(|byte| *byte == 0)
-        .filter_map(|record| {
-            let mut fields = record.splitn(3, |byte| *byte == b'\t');
-            let added = fields.next()?;
-            let deleted = fields.next()?;
-            let path = fields.next()?;
-            if path.is_empty() {
-                return None;
-            }
-            let count = |value: &[u8]| {
-                std::str::from_utf8(value)
-                    .ok()
-                    .and_then(|value| value.parse::<u32>().ok())
-                    .unwrap_or(0)
+    let mut records = raw.split(|byte| *byte == 0);
+    let mut stats = Vec::new();
+    while let Some(record) = records.next() {
+        let mut fields = record.splitn(3, |byte| *byte == b'\t');
+        let Some(added) = fields.next() else {
+            continue;
+        };
+        let Some(deleted) = fields.next() else {
+            continue;
+        };
+        let Some(path) = fields.next() else {
+            continue;
+        };
+        let path = if path.is_empty() {
+            let Some(_old_path) = records.next() else {
+                break;
             };
-            Some(GitDiffStatEntryDto {
-                path: String::from_utf8_lossy(path).into_owned(),
-                added: count(added),
-                deleted: count(deleted),
-                binary: added == b"-" || deleted == b"-",
-            })
-        })
-        .collect()
+            let Some(new_path) = records.next() else {
+                break;
+            };
+            new_path
+        } else {
+            path
+        };
+        let count = |value: &[u8]| {
+            std::str::from_utf8(value)
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(0)
+        };
+        stats.push(GitDiffStatEntryDto {
+            path: String::from_utf8_lossy(path).into_owned(),
+            added: count(added),
+            deleted: count(deleted),
+            binary: added == b"-" || deleted == b"-",
+        });
+    }
+    stats
 }
 
 pub(super) fn diff_stat(project: &str) -> Result<GitDiffStatDto, String> {
@@ -240,6 +254,20 @@ mod tests {
         assert_eq!((stats[0].added, stats[0].deleted), (12, 3));
         assert!(!stats[0].binary);
         assert!(stats[1].binary);
+    }
+
+    #[test]
+    fn parses_renames_without_misaligning_following_numstat_records() {
+        let stats = parse_numstat_z(b"12\t3\tsrc/before.ts\0\
+            4\t2\t\0src/old.ts\0src/new.ts\0\
+            8\t1\tsrc/after.ts\0");
+        assert_eq!(stats.len(), 3);
+        assert_eq!(stats[0].path, "src/before.ts");
+        assert_eq!((stats[0].added, stats[0].deleted), (12, 3));
+        assert_eq!(stats[1].path, "src/new.ts");
+        assert_eq!((stats[1].added, stats[1].deleted), (4, 2));
+        assert_eq!(stats[2].path, "src/after.ts");
+        assert_eq!((stats[2].added, stats[2].deleted), (8, 1));
     }
 
     #[test]
