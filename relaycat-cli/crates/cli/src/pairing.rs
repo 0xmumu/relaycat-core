@@ -88,8 +88,16 @@ pub fn parse_pairing_url(url: &str) -> Result<PairingMaterial> {
         }
     }
 
+    let relay_url = relay_url.context("pairing URL missing relay")?;
+    // The relay is connected over a WebSocket; anything else (file:, http:,
+    // a bare path) cannot be a relay and is rejected at parse time instead of
+    // failing later inside the transport.
+    if !(relay_url.starts_with("ws://") || relay_url.starts_with("wss://")) {
+        bail!("pairing URL relay must use ws:// or wss://");
+    }
+
     Ok(PairingMaterial {
-        relay_url: relay_url.context("pairing URL missing relay")?,
+        relay_url,
         room_id: room_id.context("pairing URL missing room")?,
         cli_public_key: cli_public_key.context("pairing URL missing pubkey")?,
         pairing_token: pairing_token.context("pairing URL missing token")?,

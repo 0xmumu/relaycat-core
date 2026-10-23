@@ -248,3 +248,25 @@ fn base64_token_len(material: &PairingMaterial) -> usize {
         .expect("token query value")
         .len()
 }
+
+#[test]
+fn pairing_url_only_accepts_websocket_relays() {
+    let material = |relay: &str| PairingMaterial {
+        relay_url: relay.to_string(),
+        room_id: "room-1".to_string(),
+        cli_public_key: [1; 32],
+        pairing_token: vec![2; 16],
+        session_kind: SessionKind::shell(),
+    };
+
+    assert!(parse_pairing_url(&pairing_url(&material("wss://relay.example.com/ws"))).is_ok());
+    assert!(parse_pairing_url(&pairing_url(&material("ws://127.0.0.1:8787"))).is_ok());
+
+    for relay in ["file:///etc/passwd", "https://relay.example.com", "relay.example.com"] {
+        let error = parse_pairing_url(&pairing_url(&material(relay))).unwrap_err();
+        assert!(
+            error.to_string().contains("ws:// or wss://"),
+            "unexpected error for {relay}: {error}"
+        );
+    }
+}
