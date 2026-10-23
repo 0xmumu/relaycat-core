@@ -121,6 +121,33 @@ fn workspace_shell_create_is_idempotent_across_gui_and_app_races() {
 }
 
 #[test]
+fn advertised_shell_limit_matches_the_single_shell_transport() {
+    let repo = Repo::new();
+    let root = ProjectRoot::open(&repo.root).unwrap();
+    let project_id = root.project_id().to_string();
+    // The caller may ask for more, but only one shell stream is addressable.
+    let service = WorkspaceService::new(root, 3);
+
+    let response = service.execute(WorkspaceRequestEnvelope {
+        request_id: "capabilities".into(),
+        project_id,
+        deadline_unix_ms: u64::MAX,
+        idempotency_key: None,
+        operation: WorkspaceRequest::Capabilities,
+    });
+    match response.result.unwrap() {
+        WorkspaceResponse::Capabilities(capabilities) => {
+            assert_eq!(
+                capabilities.shell_limit, 1,
+                "must advertise the implemented limit, not the protocol ceiling"
+            );
+            assert!(capabilities.shell);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+}
+
+#[test]
 fn raw_shell_sync_rpc_is_rejected_in_favor_of_terminal_stream_v2() {
     let repo = Repo::new();
     let root = ProjectRoot::open(&repo.root).unwrap();

@@ -1,4 +1,4 @@
-use crate::{FileService, GitService, ProjectRoot, ShellManager, ShellTransportEvent, WorkspaceServiceError, IMAGE_PREVIEW_LIMIT, TEXT_PREVIEW_LIMIT};
+use crate::{FileService, GitService, ProjectRoot, ShellManager, ShellTransportEvent, WorkspaceServiceError, IMAGE_PREVIEW_LIMIT, TEXT_PREVIEW_LIMIT, IMPLEMENTED_SHELL_LIMIT};
 use relaycat_protocol::{
     GitProgressEvent, ShellDescriptor, ShellSnapshot, WorkspaceCapabilities, WorkspaceError, WorkspaceEvent, WorkspaceEventEnvelope,
     WorkspaceRequest, WorkspaceRequestEnvelope, WorkspaceResponse, WorkspaceResponseEnvelope,
@@ -20,6 +20,8 @@ pub struct WorkspaceService {
     files: FileService,
     git: GitService,
     shells: ShellManager,
+    /// Advertised in `Capabilities`; must match what `ShellManager` enforces.
+    shell_limit: u8,
     cache: Arc<Mutex<HashMap<String, (Instant, std::result::Result<WorkspaceResponse, WorkspaceError>)>>>,
     cache_order: Arc<Mutex<VecDeque<String>>>,
     events: Arc<Mutex<VecDeque<WorkspaceEventEnvelope>>>,
@@ -28,9 +30,14 @@ pub struct WorkspaceService {
 
 impl WorkspaceService {
     pub fn new(root: ProjectRoot, shell_limit: u8) -> Self {
+        // Two ceilings apply: the protocol's absolute maximum for apps, and
+        // what this build actually implements (one addressable shell stream).
+        let shell_limit = shell_limit
+            .min(WORKSPACE_APP_SHELL_LIMIT)
+            .min(IMPLEMENTED_SHELL_LIMIT);
         Self {
             files: FileService::new(root.clone()), git: GitService::new(root.clone()),
-            shells: ShellManager::new(root.clone(), shell_limit.min(WORKSPACE_APP_SHELL_LIMIT)), root,
+            shells: ShellManager::new(root.clone(), shell_limit), shell_limit, root,
             cache: Arc::new(Mutex::new(HashMap::new())), cache_order: Arc::new(Mutex::new(VecDeque::new())),
             events: Arc::new(Mutex::new(VecDeque::new())), event_seq: Arc::new(Mutex::new(0)),
         }
@@ -98,7 +105,7 @@ impl WorkspaceService {
 
     fn dispatch(&self, operation:WorkspaceRequest)->std::result::Result<WorkspaceResponse,WorkspaceError>{
         let result:Result<WorkspaceResponse,WorkspaceServiceError>=match operation {
-            WorkspaceRequest::Capabilities=>Ok(WorkspaceResponse::Capabilities(WorkspaceCapabilities{files:true,git_read:true,git_write:true,shell:true,directory_page_size:WORKSPACE_DIRECTORY_PAGE_SIZE,directory_entry_limit:WORKSPACE_DIRECTORY_ENTRY_LIMIT,git_history_page_size:WORKSPACE_GIT_HISTORY_PAGE_SIZE,text_preview_limit:TEXT_PREVIEW_LIMIT as u32,image_preview_limit:IMAGE_PREVIEW_LIMIT as u32,shell_limit:WORKSPACE_APP_SHELL_LIMIT})),
+            WorkspaceRequest::Capabilities=>Ok(WorkspaceResponse::Capabilities(WorkspaceCapabilities{files:true,git_read:true,git_write:true,shell:true,directory_page_size:WORKSPACE_DIRECTORY_PAGE_SIZE,directory_entry_limit:WORKSPACE_DIRECTORY_ENTRY_LIMIT,git_history_page_size:WORKSPACE_GIT_HISTORY_PAGE_SIZE,text_preview_limit:TEXT_PREVIEW_LIMIT as u32,image_preview_limit:IMAGE_PREVIEW_LIMIT as u32,shell_limit:self.shell_limit})),
             WorkspaceRequest::Cancel{..}=>Ok(WorkspaceResponse::Ack),
             WorkspaceRequest::ListDirectory{path,offset,limit}=>self.files.list(&path,offset,limit).map(WorkspaceResponse::Directory),
             WorkspaceRequest::SearchFiles{query,limit}=>self.files.search(&query,limit).map(WorkspaceResponse::FileSearch),

@@ -19,6 +19,11 @@ const OUTPUT_CHUNK: usize = 32 * 1024;
 const OUTPUT_CHANNEL_CHUNKS: usize = 64;
 static NEXT_SHELL_ID: AtomicU64 = AtomicU64::new(1);
 
+/// The workspace terminal transport multiplexes a single `workspace_shell`
+/// stream, so only one shell can be addressed end to end. Advertise what is
+/// actually implemented rather than the protocol ceiling.
+pub const IMPLEMENTED_SHELL_LIMIT: u8 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellTransportEvent {
     Started(ShellDescriptor),
@@ -29,6 +34,9 @@ pub enum ShellTransportEvent {
 #[derive(Clone)]
 pub struct ShellManager {
     root: ProjectRoot,
+    /// Maximum concurrently running shells. Honoured by `create`; the service
+    /// caps it at [`IMPLEMENTED_SHELL_LIMIT`].
+    limit: usize,
     shells: Arc<Mutex<HashMap<String, Arc<Shell>>>>,
     pending_events: Arc<Mutex<VecDeque<ShellTransportEvent>>>,
 }
@@ -46,9 +54,10 @@ struct Shell {
 }
 
 impl ShellManager {
-    pub fn new(root: ProjectRoot, _limit: u8) -> Self {
+    pub fn new(root: ProjectRoot, limit: u8) -> Self {
         Self {
             root,
+            limit: usize::from(limit.max(1)).min(usize::from(IMPLEMENTED_SHELL_LIMIT)),
             shells: Arc::new(Mutex::new(HashMap::new())),
             pending_events: Arc::new(Mutex::new(VecDeque::new())),
         }
@@ -89,18 +98,25 @@ impl ShellManager {
             .shells
             .lock()
             .map_err(|_| WorkspaceServiceError::busy())?;
-        if shells.values().any(|shell| {
-            shell
-                .descriptor
-                .lock()
-                .map(|descriptor| !descriptor.exited)
-                .unwrap_or(true)
-        }) {
+        // Count live shells, not map entries: an exited shell stays in the map
+        // until its exit event has been drained, but must not consume a slot.
+        let active = shells
+            .values()
+            .filter(|shell| {
+                shell
+                    .descriptor
+                    .lock()
+                    .map(|descriptor| !descriptor.exited)
+                    .unwrap_or(true)
+            })
+            .count();
+        if active >= self.limit {
             return Err(WorkspaceServiceError::busy());
         }
 
         let numeric = NEXT_SHELL_ID.fetch_add(1, Ordering::Relaxed);
         let id = format!("shell-{numeric}");
+        let title = format!("Shell {}", shells.len() + 1);
         let cols = cols.max(1);
         let rows = rows.max(1);
         let pair = native_pty_system()
@@ -124,7 +140,7 @@ impl ShellManager {
         let writer = pair.master.take_writer().map_err(internal_error)?;
         let descriptor = ShellDescriptor {
             shell_id: id.clone(),
-            title: "Shell 1".to_string(),
+            title,
             cols,
             rows,
             last_output_seq: 0,
