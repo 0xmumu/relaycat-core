@@ -200,14 +200,15 @@ impl FileService {
         }
         if let Some(mime) = image {
             let (width, height) = image_dimensions(mime, &bytes).unwrap_or((0, 0));
-            if variant == ImageVariant::Thumbnail && (width > 512 || height > 512) {
-                if let Some((thumbnail, thumbnail_width, thumbnail_height)) = thumbnail_jpeg(&bytes) {
-                    return Ok(FilePreview::Image {
-                        path: path.to_string(), mime: "image/jpeg".to_string(),
-                        width: thumbnail_width, height: thumbnail_height,
-                        bytes: thumbnail, truncated: false,
-                    });
-                }
+            if variant == ImageVariant::Thumbnail
+                && (width > 512 || height > 512)
+                && let Some((thumbnail, thumbnail_width, thumbnail_height)) = thumbnail_jpeg(&bytes)
+            {
+                return Ok(FilePreview::Image {
+                    path: path.to_string(), mime: "image/jpeg".to_string(),
+                    width: thumbnail_width, height: thumbnail_height,
+                    bytes: thumbnail, truncated: false,
+                });
             }
             return Ok(FilePreview::Image {
                 path: path.to_string(), mime: mime.to_string(), width, height, bytes, truncated: false,
