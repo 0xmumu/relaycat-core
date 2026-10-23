@@ -7,6 +7,7 @@ pub mod pairing;
 pub mod pairing_store;
 pub mod plaintext;
 pub mod pty;
+pub(crate) mod private_fs;
 pub mod recent_store;
 pub mod relay;
 pub mod secure;

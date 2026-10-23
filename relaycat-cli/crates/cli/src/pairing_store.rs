@@ -212,31 +212,13 @@ pub fn load_session(path: &Path) -> Result<Option<StoredPairingSession>> {
 }
 
 pub fn save_session(path: &Path, session: &StoredPairingSession) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-
-    let mut options = fs::OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(path)
-        .with_context(|| format!("failed to write pairing session {}", path.display()))?;
+    // The file holds the CLI private key and the pairing token, so it is
+    // written through the private atomic writer: never group/world readable,
+    // and a crash can no longer leave a truncated (unparseable) session that
+    // would force the user to re-pair.
     let encoded = session.encode()?;
-    file.write_all(encoded.as_bytes())
-        .with_context(|| format!("failed to write pairing session {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("failed to set permissions on {}", path.display()))?;
-    }
-    Ok(())
+    crate::private_fs::write_private_atomic(path, encoded.as_bytes())
+        .with_context(|| format!("failed to write pairing session {}", path.display()))
 }
 
 pub fn ensure_gitignore(project_dir: &Path) -> Result<()> {
