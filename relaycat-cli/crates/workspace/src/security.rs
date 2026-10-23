@@ -90,3 +90,65 @@ impl ProjectRoot {
         Ok(self.canonical.join(path))
     }
 }
+
+/// Opens an already-canonical path without following a symlink in its last
+/// component.
+///
+/// `ProjectRoot::resolve` canonicalizes twice to shrink the check/use window,
+/// but a local attacker can still replace the path with a symlink between the
+/// last check and the open. Because `path` is canonical, it contains no
+/// symlinks when validated, so refusing to follow the final component turns a
+/// successful swap into an error instead of a read of an out-of-project file.
+pub(crate) fn open_without_following_symlinks(
+    path: &Path,
+) -> Result<std::fs::File, WorkspaceServiceError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options
+        .open(path)
+        .map_err(WorkspaceServiceError::io)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "relaycat-security-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn regular_files_open_normally() {
+        let dir = scratch_dir("regular");
+        let path = dir.join("note.txt");
+        std::fs::write(&path, "hi").unwrap();
+        assert!(open_without_following_symlinks(&path).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_swapped_in_place_of_the_file_is_refused() {
+        let dir = scratch_dir("symlink");
+        let outside = dir.join("outside.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        let path = dir.join("note.txt");
+        std::os::unix::fs::symlink(&outside, &path).unwrap();
+        assert!(open_without_following_symlinks(&path).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

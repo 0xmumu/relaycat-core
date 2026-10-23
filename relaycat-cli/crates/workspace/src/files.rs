@@ -171,7 +171,16 @@ impl FileService {
         // Read through a length-limited handle instead of `fs::read`: the file
         // can grow between the metadata check above and the read, and a plain
         // read would then load the grown file (and report it as complete).
-        let mut file = fs::File::open(&resolved).map_err(WorkspaceServiceError::io)?;
+        let mut file = crate::security::open_without_following_symlinks(&resolved)?;
+        // `metadata()` on the handle (fstat) describes what was actually
+        // opened, not what the path pointed at a moment earlier.
+        if !file
+            .metadata()
+            .map_err(WorkspaceServiceError::io)?
+            .is_file()
+        {
+            return Err(WorkspaceServiceError::invalid("path is not a file"));
+        }
         let mut bytes = Vec::with_capacity((metadata.len().min(limit) as usize).saturating_add(1));
         file.by_ref()
             .take(limit.saturating_add(1))
