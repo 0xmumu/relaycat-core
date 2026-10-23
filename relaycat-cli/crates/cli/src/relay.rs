@@ -33,7 +33,7 @@ use relaycat_protocol::{
     TERMINAL_STATE_PROTOCOL_V2, TerminalColor, TerminalStreamV2, decode_frame, encode_frame, encode_plain_msg,
 };
 use relaycat_workspace::{ProjectRoot, ShellTransportEvent, WorkspaceService};
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async_with_config,
     tungstenite::{Message, protocol::WebSocketConfig},
@@ -1552,6 +1552,9 @@ where
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let workspace_service = Arc::new(WorkspaceService::new(workspace_root, 3));
     let workspace_service_for_input = workspace_service.clone();
+    const MAX_IN_FLIGHT_WORKSPACE_REQUESTS: usize = 16;
+    let workspace_request_slots =
+        Arc::new(Semaphore::new(MAX_IN_FLIGHT_WORKSPACE_REQUESTS));
     let workspace_service_for_events = workspace_service.clone();
     let workspace_service_for_terminal = workspace_service.clone();
     let workspace_event_tx = output_tx.clone();
@@ -2799,13 +2802,36 @@ where
                         .try_send(PtyEvent::Plain(Box::new(PlainMsg::Heartbeat)));
                 }
                 Some(RelayInputAction::Workspace(request)) => {
+                    let permit = match workspace_request_slots.clone().try_acquire_owned() {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            let response = relaycat_protocol::WorkspaceResponseEnvelope {
+                                request_id: request.request_id,
+                                project_id: request.project_id,
+                                result: Err(relaycat_protocol::WorkspaceError {
+                                    code: relaycat_protocol::WorkspaceErrorCode::Busy,
+                                    message: "workspace is busy".into(),
+                                    retryable: true,
+                                }),
+                            };
+                            let _ = heartbeat_output_tx_for_input
+                                .send(PtyEvent::Plain(Box::new(PlainMsg::WorkspaceResponse(
+                                    response,
+                                ))))
+                                .await;
+                            continue;
+                        }
+                    };
                     let service = workspace_service_for_input.clone();
                     let output = heartbeat_output_tx_for_input.clone();
                     tokio::spawn(async move {
                         let started = Instant::now();
                         let operation = request.operation.clone();
-                        let response = tokio::task::spawn_blocking(move || service.execute(request))
-                            .await;
+                        let response = tokio::task::spawn_blocking(move || {
+                            let _permit = permit;
+                            service.execute(request)
+                        })
+                        .await;
                         if let Ok(response) = response {
                             let response_bytes = relaycat_protocol::plain_msg_encoded_len(
                                 &PlainMsg::WorkspaceResponse(response.clone()),
