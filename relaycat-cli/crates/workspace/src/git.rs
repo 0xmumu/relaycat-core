@@ -263,7 +263,7 @@ impl GitService {
             GitRemoteOperation::Push=>push_messages(before),
         }
     }
-    fn mutation_result(&self)->Result<GitMutationResult,WorkspaceServiceError>{Ok(GitMutationResult{operation_id:format!("git-{}",SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()),summary:self.summary()?})}
+    fn mutation_result(&self)->Result<GitMutationResult,WorkspaceServiceError>{Ok(GitMutationResult{operation_id:next_operation_id("git"),summary:self.summary()?})}
     fn lock_mutation(&self)->Result<std::sync::MutexGuard<'_,()>,WorkspaceServiceError>{self.mutation.try_lock().map_err(|_|WorkspaceServiceError::busy())}
     fn repository_root(&self)->Result<PathBuf,WorkspaceServiceError>{
         let root=self.text(&["rev-parse","--show-toplevel"])?;
@@ -304,6 +304,17 @@ fn status_name(code:char)->String{match code{'A'=>"added",'D'=>"deleted",'R'=>"r
 /// colliding, and `create_new` refuses to follow a planted symlink.
 static COMMIT_MESSAGE_SEQUENCE: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1);
+
+/// Process-unique, monotonic operation ids. A millisecond timestamp is not
+/// enough: two operations started in the same tick produced the same id and
+/// their progress events were attributed to one another.
+static OPERATION_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+pub(crate) fn next_operation_id(prefix: &str) -> String {
+    let sequence = OPERATION_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{prefix}-{}-{sequence}", std::process::id())
+}
 
 fn write_commit_message_file(message: &str) -> Result<PathBuf, WorkspaceServiceError> {
     for _ in 0..8 {
@@ -737,5 +748,13 @@ mod tests {
         let _ = cmd;
         let result = run_git_command(child_cmd, None, Duration::from_millis(50));
         assert_eq!(result.unwrap_err().code(), WorkspaceErrorCode::Timeout);
+    }
+
+    #[test]
+    fn operation_ids_stay_unique_within_one_tick() {
+        let first = next_operation_id("git");
+        let second = next_operation_id("git");
+        assert_ne!(first, second);
+        assert!(first.starts_with(&format!("git-{}-", std::process::id())));
     }
 }

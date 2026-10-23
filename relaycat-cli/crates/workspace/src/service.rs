@@ -1,4 +1,5 @@
 use crate::{FileService, GitService, ProjectRoot, ShellManager, ShellTransportEvent, WorkspaceServiceError, IMAGE_PREVIEW_LIMIT, TEXT_PREVIEW_LIMIT, IMPLEMENTED_SHELL_LIMIT};
+use crate::git::next_operation_id;
 use relaycat_protocol::{
     GitProgressEvent, ShellDescriptor, ShellSnapshot, WorkspaceCapabilities, WorkspaceError, WorkspaceEvent, WorkspaceEventEnvelope,
     WorkspaceRequest, WorkspaceRequestEnvelope, WorkspaceResponse, WorkspaceResponseEnvelope,
@@ -153,7 +154,7 @@ impl WorkspaceService {
     }
 
     fn git_remote(&self,kind:relaycat_protocol::GitRemoteOperation)->Result<WorkspaceResponse,WorkspaceServiceError>{
-        let operation_id=format!("{:?}-{}",kind,unix_ms());
+        let operation_id = next_operation_id(&format!("{kind:?}").to_ascii_lowercase());
         match self.git.remote_with_summary(kind){
             Ok(outcome)=>{
                 let last=outcome.messages.len().saturating_sub(1);
