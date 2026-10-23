@@ -248,7 +248,23 @@ impl GitService {
         for path in paths {
             if self.output(&["ls-files", "--error-unmatch", "--", path])?.status.success() {
                 self.run_success(&["restore", "--worktree", "--", path])?;
-            } else { let target=self.root.resolve(path)?; if target.is_dir(){
+            } else {
+                let lexical = self.root.lexical_path(path)?;
+                if fs::symlink_metadata(&lexical)
+                    .map_err(WorkspaceServiceError::io)?
+                    .file_type()
+                    .is_symlink()
+                {
+                    let parent = Path::new(path)
+                        .parent()
+                        .and_then(Path::to_str)
+                        .unwrap_or("");
+                    self.root.resolve(parent)?;
+                    fs::remove_file(lexical).map_err(WorkspaceServiceError::io)?;
+                    continue;
+                }
+                let target = self.root.resolve(path)?;
+                if target.is_dir() {
                 // A single "discard" on an untracked directory used to delete
                 // the whole tree without ever listing it. Refuse when the tree
                 // is large enough that the caller cannot have reviewed it.
@@ -258,8 +274,11 @@ impl GitService {
                         "refusing to discard untracked directory `{path}`: it contains more than {MAX_UNTRACKED_DISCARD_ENTRIES} entries; delete its files individually after reviewing the list"
                     )));
                 }
-                fs::remove_dir_all(target).map_err(WorkspaceServiceError::io)?
-            }else{fs::remove_file(target).map_err(WorkspaceServiceError::io)?} }
+                    fs::remove_dir_all(target).map_err(WorkspaceServiceError::io)?
+                } else {
+                    fs::remove_file(target).map_err(WorkspaceServiceError::io)?;
+                }
+            }
         }
         self.mutation_result()
     }
@@ -764,6 +783,46 @@ mod tests {
             "true",
             "stdout must survive the reader rework"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discarding_untracked_symlink_preserves_its_tracked_target() {
+        use std::os::unix::fs::symlink;
+
+        let repo = temp_repo("discard-symlink");
+        let target = repo.join("tracked.txt");
+        fs::write(&target, "tracked content").unwrap();
+        assert!(Command::new("git")
+            .current_dir(&repo)
+            .args(["add", "tracked.txt"])
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .current_dir(&repo)
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                "tracked file",
+            ])
+            .status()
+            .unwrap()
+            .success());
+        let link = repo.join("untracked-link");
+        symlink(&target, &link).unwrap();
+
+        let service = GitService::new(ProjectRoot::open(&repo).unwrap());
+        service.discard(&["untracked-link".into()]).unwrap();
+
+        assert!(fs::symlink_metadata(&link).is_err());
+        assert_eq!(fs::read_to_string(target).unwrap(), "tracked content");
+        let _ = fs::remove_dir_all(&repo);
     }
 
     #[test]
