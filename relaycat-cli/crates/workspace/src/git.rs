@@ -6,15 +6,57 @@ use relaycat_protocol::{
 };
 use sha2::{Digest, Sha256};
 use std::{
+    cell::RefCell,
     collections::BTreeMap,
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+thread_local! {
+    /// Cancel flag of the workspace request this thread is currently serving.
+    ///
+    /// Requests run one at a time per `spawn_blocking` thread, so a
+    /// thread-local is an exact match for "the request I am executing" — unlike
+    /// a field on `GitService`, which is shared by every concurrent request and
+    /// would let one cancellation kill another request's git child.
+    static ACTIVE_CANCEL: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+}
+
+/// Installs a cancel flag for the duration of one request and restores the
+/// previous one when dropped, so nesting (or a panic) cannot leak state.
+pub(crate) struct CancelScope {
+    previous: Option<Arc<AtomicBool>>,
+}
+
+impl Drop for CancelScope {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        ACTIVE_CANCEL.with(|slot| *slot.borrow_mut() = previous);
+    }
+}
+
+pub(crate) fn enter_cancel_scope(flag: Arc<AtomicBool>) -> CancelScope {
+    let previous = ACTIVE_CANCEL.with(|slot| slot.borrow_mut().replace(flag));
+    CancelScope { previous }
+}
+
+/// True once the app cancelled the request running on this thread.
+fn cancel_requested() -> bool {
+    ACTIVE_CANCEL.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    })
+}
 
 const GIT_ERROR_MESSAGE_LIMIT: usize = 4 * 1024;
 const MAX_GIT_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
@@ -368,6 +410,11 @@ fn run_git_command(
     stdin_bytes: Option<&[u8]>,
     timeout: Duration,
 ) -> Result<Output, WorkspaceServiceError> {
+    // Checked before spawning so a request cancelled between two git commands
+    // (commit → push, for example) stops before starting the next one.
+    if cancel_requested() {
+        return Err(WorkspaceServiceError::cancelled());
+    }
     if stdin_bytes.is_some() {
         command.stdin(Stdio::piped());
     } else {
@@ -415,25 +462,41 @@ fn run_git_command(
         let _ = stderr_tx.send(read_bounded_stream(stderr));
     });
     let deadline = Instant::now() + timeout;
-    let status = loop {
+    enum Stop {
+        Exited(std::process::ExitStatus),
+        TimedOut,
+        Cancelled,
+    }
+    let stop = loop {
         if let Some(status) = child.try_wait().map_err(WorkspaceServiceError::io)? {
-            break Some(status);
+            break Stop::Exited(status);
+        }
+        // Checked on every poll so a Cancel for the in-flight request takes
+        // effect within one tick instead of at the timeout.
+        if cancel_requested() {
+            break Stop::Cancelled;
         }
         if Instant::now() >= deadline {
-            break None;
+            break Stop::TimedOut;
         }
         thread::sleep(Duration::from_millis(20));
     };
 
-    let Some(status) = status else {
-        // Timed out: take down the whole process group (git *and* its ssh
-        // helper), then stop waiting for the pipes.
-        kill_process_group(&mut child);
-        let _ = child.wait();
-        let drain_deadline = Instant::now() + GIT_OUTPUT_DRAIN_TIMEOUT;
-        let _ = recv_bounded(&stdout_rx, drain_deadline);
-        let _ = recv_bounded(&stderr_rx, drain_deadline);
-        return Err(WorkspaceServiceError::timeout());
+    let status = match stop {
+        Stop::Exited(status) => status,
+        Stop::TimedOut | Stop::Cancelled => {
+            // Timed out or cancelled: take down the whole process group (git
+            // *and* its ssh helper), then stop waiting for the pipes.
+            kill_process_group(&mut child);
+            let _ = child.wait();
+            let drain_deadline = Instant::now() + GIT_OUTPUT_DRAIN_TIMEOUT;
+            let _ = recv_bounded(&stdout_rx, drain_deadline);
+            let _ = recv_bounded(&stderr_rx, drain_deadline);
+            return Err(match stop {
+                Stop::Cancelled => WorkspaceServiceError::cancelled(),
+                _ => WorkspaceServiceError::timeout(),
+            });
+        }
     };
 
     // The child is gone, but a detached grandchild can still hold the pipes
@@ -756,5 +819,35 @@ mod tests {
         let second = next_operation_id("git");
         assert_ne!(first, second);
         assert!(first.starts_with(&format!("git-{}-", std::process::id())));
+    }
+
+    #[test]
+    fn a_cancelled_request_does_not_start_new_git_work() {
+        let _scope = enter_cancel_scope(Arc::new(AtomicBool::new(true)));
+        let mut command = Command::new("git");
+        command.arg("--version");
+        let error = run_git_command(command, None, Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error.code(), WorkspaceErrorCode::Cancelled);
+    }
+
+    #[test]
+    fn cancelling_while_git_runs_kills_the_process_group() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let _scope = enter_cancel_scope(flag.clone());
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        let started = Instant::now();
+        let error = run_git_command(command, None, Duration::from_secs(60)).unwrap_err();
+        canceller.join().unwrap();
+        assert_eq!(error.code(), WorkspaceErrorCode::Cancelled);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "cancel must not wait for the 60s timeout, took {:?}",
+            started.elapsed(),
+        );
     }
 }

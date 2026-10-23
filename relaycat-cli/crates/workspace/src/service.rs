@@ -8,7 +8,10 @@ use relaycat_protocol::{
 };
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -34,9 +37,27 @@ pub struct WorkspaceService {
     events: Arc<Mutex<VecDeque<WorkspaceEventEnvelope>>>,
     event_seq: Arc<Mutex<u64>>,
     /// Request ids the app asked to cancel before they started running.
-    /// `execute` consumes them at entry; in-flight git commands are not
-    /// interrupted (they finish and their result is still delivered).
+    /// `execute` consumes them at entry.
     cancelled: Arc<Mutex<VecDeque<String>>>,
+    /// Requests currently executing on a worker thread, mapped to the flag
+    /// their git child processes poll. A `Cancel` for one of these flips the
+    /// flag, which kills the running child within one poll tick.
+    active: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+}
+
+/// Removes a request from the active table when it finishes, including on
+/// early return, so a cancelled (or panicking) request never leaks an entry.
+struct ActiveRequest {
+    active: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    request_id: String,
+}
+
+impl Drop for ActiveRequest {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(&self.request_id);
+        }
+    }
 }
 
 impl WorkspaceService {
@@ -52,6 +73,7 @@ impl WorkspaceService {
             cache: Arc::new(Mutex::new(HashMap::new())), cache_order: Arc::new(Mutex::new(VecDeque::new())),
             events: Arc::new(Mutex::new(VecDeque::new())), event_seq: Arc::new(Mutex::new(0)),
             cancelled: Arc::new(Mutex::new(VecDeque::new())),
+            active: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -98,6 +120,13 @@ impl WorkspaceService {
         if request.project_id != project_id {
             return WorkspaceResponseEnvelope{request_id,project_id,result:Err(WorkspaceServiceError::outside_project().into())};
         }
+        // Cancel is resolved before dispatch: it must reach a request that is
+        // already running on another worker thread, which the dispatch table
+        // cannot do (it only ever sees its own operation).
+        if let WorkspaceRequest::Cancel { target_request_id } = &request.operation {
+            self.request_cancellation(target_request_id);
+            return WorkspaceResponseEnvelope{request_id,project_id,result:Ok(WorkspaceResponse::Ack)};
+        }
         // A Cancel that arrived before this request started: skip the work.
         if self.take_cancelled(&request_id) {
             return WorkspaceResponseEnvelope{request_id,project_id,result:Err(WorkspaceServiceError::cancelled().into())};
@@ -116,7 +145,17 @@ impl WorkspaceService {
                 return WorkspaceResponseEnvelope{request_id,project_id,result};
             }
         }
-        let result=self.dispatch(request.operation);
+        let (guard, cancel_flag) = self.begin_request(&request_id);
+        // Registering and checking are separate steps: a Cancel that landed in
+        // between is sitting in the queue, so consume it here instead of
+        // running a request the app already gave up on.
+        let result = if self.take_cancelled(&request_id) {
+            Err(WorkspaceServiceError::cancelled().into())
+        } else {
+            let _scope = crate::git::enter_cancel_scope(cancel_flag);
+            self.dispatch(request.operation)
+        };
+        drop(guard);
         // Only successful results are cached: a transient failure must not pin
         // every retry that reuses the key to the same error for ten minutes.
         if result.is_ok() {
@@ -134,7 +173,7 @@ impl WorkspaceService {
     fn dispatch(&self, operation:WorkspaceRequest)->std::result::Result<WorkspaceResponse,WorkspaceError>{
         let result:Result<WorkspaceResponse,WorkspaceServiceError>=match operation {
             WorkspaceRequest::Capabilities=>Ok(WorkspaceResponse::Capabilities(WorkspaceCapabilities{files:true,git_read:true,git_write:true,shell:true,directory_page_size:WORKSPACE_DIRECTORY_PAGE_SIZE,directory_entry_limit:WORKSPACE_DIRECTORY_ENTRY_LIMIT,git_history_page_size:WORKSPACE_GIT_HISTORY_PAGE_SIZE,text_preview_limit:TEXT_PREVIEW_LIMIT as u32,image_preview_limit:IMAGE_PREVIEW_LIMIT as u32,shell_limit:self.shell_limit})),
-            WorkspaceRequest::Cancel{target_request_id}=>{self.remember_cancelled(&target_request_id);Ok(WorkspaceResponse::Ack)},
+            WorkspaceRequest::Cancel{..}=>Ok(WorkspaceResponse::Ack),
             WorkspaceRequest::ListDirectory{path,offset,limit}=>self.files.list(&path,offset,limit).map(WorkspaceResponse::Directory),
             WorkspaceRequest::SearchFiles{query,limit}=>self.files.search(&query,limit).map(WorkspaceResponse::FileSearch),
             WorkspaceRequest::ReadFile{path,max_bytes,image_variant}=>self.files.read(&path,max_bytes,image_variant).map(WorkspaceResponse::File),
@@ -181,6 +220,34 @@ impl WorkspaceService {
     }
 
     fn cached(&self,key:&str)->Option<std::result::Result<WorkspaceResponse,WorkspaceError>>{let now=Instant::now();let mut cache=self.cache.lock().ok()?;cache.retain(|_,(created,_)|now.duration_since(*created)<IDEMPOTENCY_TTL);cache.get(key).map(|(_,result)|result.clone())}
+    /// Marks a request as running and hands out the flag its git children poll.
+    fn begin_request(&self, request_id: &str) -> (ActiveRequest, Arc<AtomicBool>) {
+        let flag = Arc::new(AtomicBool::new(false));
+        if let Ok(mut active) = self.active.lock() {
+            // A duplicate id while one is running: the newest registration
+            // wins, so a Cancel reaches the operation the app is looking at.
+            active.insert(request_id.to_string(), flag.clone());
+        }
+        (
+            ActiveRequest {
+                active: self.active.clone(),
+                request_id: request_id.to_string(),
+            },
+            flag,
+        )
+    }
+    fn request_cancellation(&self, target_request_id: &str) {
+        if let Ok(active) = self.active.lock()
+            && let Some(flag) = active.get(target_request_id)
+        {
+            // Already running: the git poll loop sees this within one tick.
+            flag.store(true, Ordering::SeqCst);
+            return;
+        }
+        // Not started yet, or already finished: queue it so a fast retry of the
+        // same id is skipped instead of doing the work.
+        self.remember_cancelled(target_request_id);
+    }
     fn take_cancelled(&self, request_id: &str) -> bool {
         let Ok(mut cancelled) = self.cancelled.lock() else {
             return false;
@@ -291,5 +358,59 @@ mod tests {
         assert_eq!(events.len(), EVENT_QUEUE_LIMIT);
         assert_eq!(events.front().unwrap().event_seq, 10);
         assert_eq!(events.back().unwrap().event_seq, total - 1);
+    }
+
+    #[test]
+    fn cancelling_a_running_request_flips_the_flag_its_git_children_poll() {
+        let dir = std::env::temp_dir().join(format!(
+            "relaycat-cancel-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let service = WorkspaceService::new(ProjectRoot::open(&dir).unwrap(), 1);
+
+        let (guard, flag) = service.begin_request("slow-request");
+        assert!(!flag.load(Ordering::SeqCst));
+
+        let cancel = service.execute(WorkspaceRequestEnvelope {
+            request_id: "cancel-1".into(),
+            project_id: service.project_id().to_string(),
+            deadline_unix_ms: u64::MAX,
+            idempotency_key: None,
+            operation: WorkspaceRequest::Cancel {
+                target_request_id: "slow-request".into(),
+            },
+        });
+        assert!(matches!(cancel.result.unwrap(), WorkspaceResponse::Ack));
+        assert!(
+            flag.load(Ordering::SeqCst),
+            "a Cancel for a running request must set its flag"
+        );
+
+        // Finishing the request must not leave a stale entry behind.
+        drop(guard);
+        assert!(service.active.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_cancel_for_an_unknown_request_is_still_queued() {
+        let dir = std::env::temp_dir().join(format!(
+            "relaycat-cancel-queue-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let service = WorkspaceService::new(ProjectRoot::open(&dir).unwrap(), 1);
+        service.request_cancellation("not-started");
+        assert!(service.take_cancelled("not-started"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
