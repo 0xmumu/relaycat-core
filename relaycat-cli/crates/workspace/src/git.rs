@@ -11,7 +11,7 @@ use std::{
     io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -283,6 +283,15 @@ fn run_git_command(
     } else {
         command.stdin(Stdio::null());
     }
+    // Give the child its own process group. `git push`/`git fetch` spawn an
+    // ssh helper that inherits git's stdout/stderr, so killing only `git`
+    // leaves the pipes open and any reader waiting for EOF would hang
+    // forever. With its own group the whole tree can be killed at once.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -304,28 +313,48 @@ fn run_git_command(
         .stderr
         .take()
         .ok_or_else(|| WorkspaceServiceError::invalid("git stderr unavailable"))?;
-    let stdout_reader = thread::spawn(move || read_bounded_stream(stdout));
-    let stderr_reader = thread::spawn(move || read_bounded_stream(stderr));
+    // The readers report through channels instead of returning values, so the
+    // caller can wait for them with a deadline. Joining the threads directly
+    // would block forever whenever a grandchild keeps the pipe open.
+    let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
+    let (stderr_tx, stderr_rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = stdout_tx.send(read_bounded_stream(stdout));
+    });
+    thread::spawn(move || {
+        let _ = stderr_tx.send(read_bounded_stream(stderr));
+    });
     let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(WorkspaceServiceError::io)? {
-            break status;
+            break Some(status);
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
-            return Err(WorkspaceServiceError::timeout());
+            break None;
         }
         thread::sleep(Duration::from_millis(20));
     };
-    let (stdout, stdout_truncated) = stdout_reader
-        .join()
-        .map_err(|_| WorkspaceServiceError::invalid("git stdout reader failed"))??;
-    let (stderr, stderr_truncated) = stderr_reader
-        .join()
-        .map_err(|_| WorkspaceServiceError::invalid("git stderr reader failed"))??;
+
+    let Some(status) = status else {
+        // Timed out: take down the whole process group (git *and* its ssh
+        // helper), then stop waiting for the pipes.
+        kill_process_group(&mut child);
+        let _ = child.wait();
+        let drain_deadline = Instant::now() + GIT_OUTPUT_DRAIN_TIMEOUT;
+        let _ = recv_bounded(&stdout_rx, drain_deadline);
+        let _ = recv_bounded(&stderr_rx, drain_deadline);
+        return Err(WorkspaceServiceError::timeout());
+    };
+
+    // The child is gone, but a detached grandchild can still hold the pipes
+    // open. Drain with a deadline so the request always terminates; partial
+    // output is reported as an error rather than silently truncated, because a
+    // truncated `git status` would look like a complete (and wrong) file list.
+    let drain_deadline = Instant::now() + GIT_OUTPUT_DRAIN_TIMEOUT;
+    let stdout_result = recv_bounded(&stdout_rx, drain_deadline);
+    let stderr_result = recv_bounded(&stderr_rx, drain_deadline);
+    let (stdout, stdout_truncated) = stdout_result.ok_or_else(lingering_pipes_error)??;
+    let (stderr, stderr_truncated) = stderr_result.ok_or_else(lingering_pipes_error)??;
     if stdout_truncated || stderr_truncated {
         return Err(WorkspaceServiceError::new(
             WorkspaceErrorCode::InvalidRequest,
@@ -338,6 +367,43 @@ fn run_git_command(
         stdout,
         stderr,
     })
+}
+
+/// How long the output readers may keep a finished command alive.
+const GIT_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn recv_bounded<T>(receiver: &mpsc::Receiver<T>, deadline: Instant) -> Option<T> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    receiver.recv_timeout(remaining).ok()
+}
+
+fn lingering_pipes_error() -> WorkspaceServiceError {
+    WorkspaceServiceError::new(
+        WorkspaceErrorCode::Internal,
+        "git finished but did not close its output pipes; a child process is still running",
+        true,
+    )
+}
+
+/// Kills `git` and everything it started. On Unix the child leads its own
+/// process group, so the group kill also reaches the ssh helper that would
+/// otherwise keep the output pipes open.
+#[cfg(unix)]
+fn kill_process_group(child: &mut std::process::Child) {
+    let pid = child.id();
+    if pid > 0 {
+        // SAFETY: `kill` with a negative pid sends the signal to the process
+        // group led by `pid`; the pid comes from a live child we spawned.
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(child: &mut std::process::Child) {
+    let _ = child.kill();
 }
 
 fn read_bounded_stream(mut stream: impl Read) -> Result<(Vec<u8>, bool), WorkspaceServiceError> {
@@ -484,6 +550,62 @@ fn redact_url_credentials(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_repo(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "relaycat-workspace-git-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let mut init = Command::new("git");
+        init.args(["init", "--quiet"])
+            .current_dir(&path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        init.status().unwrap();
+        path
+    }
+
+    /// Regression: `git push`/`git fetch` spawn an ssh helper that inherits
+    /// git's stdout. Killing only `git` left the pipes open, so joining the
+    /// output readers blocked forever and the request never returned.
+    #[test]
+    fn a_lingering_child_process_cannot_block_the_git_timeout() {
+        let repo = temp_repo("timeout");
+        let mut command = Command::new("git");
+        // The alias runs through a shell and leaves `sleep 30` holding stdout.
+        command
+            .current_dir(&repo)
+            .args(["-c", "alias.linger=!sleep 30", "linger"]);
+        let started = Instant::now();
+        let result = run_git_command(command, None, Duration::from_millis(300));
+        let elapsed = started.elapsed();
+        let _ = fs::remove_dir_all(&repo);
+        assert!(result.is_err(), "the lingering alias must time out");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "the timeout must not block on the lingering child (took {elapsed:?})"
+        );
+    }
+
+    #[test]
+    fn a_normal_command_still_reports_its_output() {
+        let repo = temp_repo("normal");
+        let mut command = Command::new("git");
+        command
+            .current_dir(&repo)
+            .args(["rev-parse", "--is-inside-work-tree"]);
+        let output = run_git_command(command, None, Duration::from_secs(10)).unwrap();
+        let _ = fs::remove_dir_all(&repo);
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "true",
+            "stdout must survive the reader rework"
+        );
+    }
 
     #[test]
     fn missing_git_executable_has_a_stable_workspace_error_code() {
