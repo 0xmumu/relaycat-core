@@ -931,6 +931,7 @@ export function createWorkspacePanel(
     renderState(container, t("workspace_load_failed", String(error)));
   }
 
+  let previewRequestToken = 0;
   async function previewFile(
     relativePath: string,
     title = relativePath,
@@ -938,6 +939,7 @@ export function createWorkspacePanel(
     restore = false,
   ) {
     if (!project) return;
+    const requestToken = ++previewRequestToken;
     const activeProject = project;
     const revision = projectRevision;
     previewRestore[targetMode] = () =>
@@ -949,10 +951,20 @@ export function createWorkspacePanel(
         relativePath,
         maxBytes: workspaceLocalPreviewLimit(relativePath),
       });
-      if (project !== activeProject || projectRevision !== revision) return;
+      if (
+        requestToken !== previewRequestToken ||
+        project !== activeProject ||
+        projectRevision !== revision
+      )
+        return;
       renderPreview(title, preview, false, relativePath);
     } catch (error) {
-      if (project !== activeProject || projectRevision !== revision) return;
+      if (
+        requestToken !== previewRequestToken ||
+        project !== activeProject ||
+        projectRevision !== revision
+      )
+        return;
       previewCode.textContent = t("workspace_load_failed", String(error));
     }
   }
