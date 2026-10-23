@@ -13,6 +13,9 @@ use std::{
 
 const IDEMPOTENCY_TTL: Duration = Duration::from_secs(10 * 60);
 const IDEMPOTENCY_LIMIT: usize = 256;
+/// Upper bound on queued workspace events (mostly git progress). Without it a
+/// disconnected app lets the queue grow for the life of the session.
+const EVENT_QUEUE_LIMIT: usize = 256;
 
 #[derive(Clone)]
 pub struct WorkspaceService {
@@ -154,7 +157,50 @@ impl WorkspaceService {
 
     fn cached(&self,key:&str)->Option<std::result::Result<WorkspaceResponse,WorkspaceError>>{let now=Instant::now();let mut cache=self.cache.lock().ok()?;cache.retain(|_,(created,_)|now.duration_since(*created)<IDEMPOTENCY_TTL);cache.get(key).map(|(_,result)|result.clone())}
     fn remember(&self,key:String,result:std::result::Result<WorkspaceResponse,WorkspaceError>){if let(Ok(mut cache),Ok(mut order))=(self.cache.lock(),self.cache_order.lock()){if !cache.contains_key(&key){order.push_back(key.clone());}cache.insert(key,(Instant::now(),result));while order.len()>IDEMPOTENCY_LIMIT{if let Some(old)=order.pop_front(){cache.remove(&old);}}}}
-    fn push_event(&self,event:WorkspaceEvent){if let Ok(mut seq)=self.event_seq.lock(){*seq=seq.saturating_add(1);if let Ok(mut events)=self.events.lock(){events.push_back(WorkspaceEventEnvelope{project_id:self.root.project_id().into(),event_seq:*seq,event});}}}
+    fn push_event(&self,event:WorkspaceEvent){if let Ok(mut seq)=self.event_seq.lock(){*seq=seq.saturating_add(1);if let Ok(mut events)=self.events.lock(){enqueue_event(&mut events,WorkspaceEventEnvelope{project_id:self.root.project_id().into(),event_seq:*seq,event});}}}
+}
+
+/// Appends an event, dropping the oldest once the queue is full. Events are
+/// progress notifications (git fetch/pull/push summaries), so losing the
+/// oldest under backpressure is preferable to unbounded memory growth.
+fn enqueue_event(events: &mut VecDeque<WorkspaceEventEnvelope>, event: WorkspaceEventEnvelope) {
+    events.push_back(event);
+    while events.len() > EVENT_QUEUE_LIMIT {
+        events.pop_front();
+    }
 }
 
 fn unix_ms()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis().min(u128::from(u64::MAX)) as u64}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use relaycat_protocol::GitProgressEvent;
+
+    fn progress(seq: u64) -> WorkspaceEventEnvelope {
+        WorkspaceEventEnvelope {
+            project_id: "p".into(),
+            event_seq: seq,
+            event: WorkspaceEvent::GitProgress(GitProgressEvent {
+                operation_id: format!("op-{seq}"),
+                phase: "summary".into(),
+                message: format!("message {seq}"),
+                percent: None,
+                completed: false,
+                success: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn the_event_queue_drops_the_oldest_events_at_the_cap() {
+        let mut events = VecDeque::new();
+        let total = EVENT_QUEUE_LIMIT as u64 + 10;
+        for seq in 0..total {
+            enqueue_event(&mut events, progress(seq));
+        }
+        assert_eq!(events.len(), EVENT_QUEUE_LIMIT);
+        assert_eq!(events.front().unwrap().event_seq, 10);
+        assert_eq!(events.back().unwrap().event_seq, total - 1);
+    }
+}
