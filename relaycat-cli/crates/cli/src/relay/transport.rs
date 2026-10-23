@@ -121,10 +121,6 @@ pub(crate) enum RelayTransportReconnect {
         ws_url: String,
         handshake: Arc<CliSecureHandshake>,
     },
-    Plaintext {
-        ws_url: String,
-        room_id: String,
-    },
 }
 
 impl RelayTransportReconnect {
@@ -145,32 +141,6 @@ impl RelayTransportReconnect {
                 )
                 .await
                 .context("failed to send secure join frame")?;
-                Ok((ws_writer, ws_reader))
-            }
-            Self::Plaintext { ws_url, room_id } => {
-                let (socket, _) = tokio::time::timeout(
-                    RELAY_CONNECT_TIMEOUT,
-                    connect_async_with_config(ws_url, Some(relay_websocket_config()), false),
-                )
-                .await
-                .context("relay connection timed out")?
-                .with_context(|| format!("failed to connect relay {ws_url}"))?;
-                let (mut ws_writer, ws_reader) = socket.split();
-                let join = OuterFrame::Join {
-                    room_id: room_id.clone(),
-                    role: Role::Cli,
-                    device_pubkey: [0; 32],
-                    pairing_token_proof: None,
-                    relay_admission: None,
-                    // Plaintext dev relay carries no end-to-end encryption, so
-                    // there is no key derivation to salt.
-                    connection_salt: None,
-                    supports_join_accepted: false,
-                    app_join_intent: relaycat_protocol::AppJoinIntent::Takeover,
-                };
-                ws_send(&mut ws_writer, Message::Binary(encode_frame(&join)?.into()))
-                    .await
-                    .context("failed to send join frame")?;
                 Ok((ws_writer, ws_reader))
             }
         }

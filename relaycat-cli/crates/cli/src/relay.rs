@@ -47,7 +47,6 @@ use crate::{
         RELAYCAT_DIR, StoredPairingSession, current_unix_timestamp, ensure_gitignore, load_session,
         project_dir, save_session, session_file_path, write_pairing_qr_pngs,
     },
-    plaintext::{decode_plaintext_data, encode_plaintext_data},
     secure::{CliSecureHandshake, SecureSession, secure_join_frame},
     terminal_core::{
         TerminalCore, TerminalCoreConfig, TerminalFeedBatch, TerminalWireError,
@@ -158,35 +157,6 @@ const WS_SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// landing in the kernel send buffer, so silence is the only reliable signal.
 const WS_READ_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 const LOCAL_WORK_MODE_TOGGLE_KEY: u8 = 0x07; // Ctrl-G.
-
-pub async fn run_plaintext(target: TargetCommand, relay: RelayOptions) -> Result<()> {
-    let language = CliLanguage::from_system_locale();
-    target.validate()?;
-    let project_dir = project_dir(target.cwd.as_deref())?;
-    if let Some(log_path) = init_log_file(&project_dir) {
-        eprintln!("{}", relaycat_logs_message(&log_path, language));
-    }
-    let room_id = relay
-        .room_id
-        .clone()
-        .context("plaintext dev relay mode requires --room")?;
-
-    let ws_url = build_ws_url(&relay.url, &room_id, "cli");
-    let reconnect = Arc::new(RelayTransportReconnect::Plaintext {
-        ws_url,
-        room_id: room_id.clone(),
-    });
-    let (ws_writer, ws_reader) = reconnect
-        .connect()
-        .await
-        .with_context(|| initial_relay_unavailable_message(&target))?;
-    relaycat_log(
-        "INFO",
-        format!("cli connected to relay room {room_id} as cli"),
-    );
-
-    run_plaintext_pty_relay(target, room_id, reconnect, ws_writer, ws_reader).await
-}
 
 type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 type WsWriter = SplitSink<WsStream, Message>;
@@ -659,37 +629,6 @@ impl DeferredHistoryThaw {
         self.started_at = None;
         self.deadline = None;
     }
-}
-
-async fn run_plaintext_pty_relay(
-    target: TargetCommand,
-    room_id: String,
-    reconnect: Arc<RelayTransportReconnect>,
-    ws_writer: WsWriter,
-    ws_reader: WsReader,
-) -> Result<()> {
-    run_pty_relay(
-        target,
-        move |msg, transport_seq| {
-            let frame =
-                encode_plaintext_data(room_id.clone(), Direction::CliToApp, transport_seq, msg)?;
-            encode_relay_frame_bytes(&frame)
-        },
-        move |frame| decode_plaintext_data(&frame),
-        || Ok(()),
-        Arc::new(AtomicBool::new(true)),
-        // Plaintext relay has no capability handshake, so attribute tables are
-        // always sent in full (legacy semantics).
-        Arc::new(AtomicBool::new(false)),
-        // Auxiliary streams require the secure Hello capability negotiation.
-        Arc::new(AtomicBool::new(false)),
-        Arc::new(AtomicU64::new(1)),
-        Arc::new(Mutex::new(AppResumeGate { resume_ready: true })),
-        reconnect,
-        ws_writer,
-        ws_reader,
-    )
-    .await
 }
 
 async fn run_secure_pty_relay(
