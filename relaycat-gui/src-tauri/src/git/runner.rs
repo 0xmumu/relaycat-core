@@ -33,7 +33,8 @@ pub fn git_output_with_timeout(
     args: &[&str],
     timeout: Duration,
 ) -> Result<Output, String> {
-    let mut command = Command::new("git")
+    let mut command = Command::new("git");
+    command
         .args(args)
         .current_dir(project)
         .env("GIT_TERMINAL_PROMPT", "0")
