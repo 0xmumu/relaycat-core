@@ -38,10 +38,11 @@ pub fn git_output_with_timeout(
         .current_dir(project)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GCM_INTERACTIVE", "Never")
-        // Stable English diagnostics so the UI can classify failures. Content
-        // (paths, messages, diffs) is unaffected; only git's own output text
-        // is pinned.
-        .env("LC_ALL", "C")
+        // Pin Git's diagnostic messages without forcing hooks and content
+        // handling into the C locale.
+        .env_remove("LC_ALL")
+        .env("LC_MESSAGES", "C")
+        .env("LANGUAGE", "C")
         // The GUI has no terminal to host an editor. Commands that would open
         // one (for example `rebase --continue`) keep their existing message.
         .env("GIT_EDITOR", "true")
@@ -49,6 +50,11 @@ pub fn git_output_with_timeout(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if std::env::var_os("LANG").is_none() {
+        if let Some(locale) = std::env::var_os("LC_ALL") {
+            command.env("LANG", locale);
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
