@@ -102,6 +102,8 @@ interface Tab {
 }
 
 const MAX_PASTE_BYTES = 2 * 1024 * 1024;
+const MAX_REMOTE_GRID_COLS = 1000;
+const MAX_REMOTE_GRID_ROWS = 500;
 
 function enqueueSessionInput(tab: Tab, data: string): void {
   if (!data || tab.id.startsWith("failed-") || tab.state === "exited") return;
@@ -814,9 +816,19 @@ async function createTab(tool: string, project: string, relay: string) {
   // desktop window, since the child is then sized to the whole window.
   term.parser.registerOscHandler(9780, (data) => {
     const [c, r] = data.split(";").map((n) => parseInt(n, 10));
-    if (Number.isFinite(c) && Number.isFinite(r) && c > 0 && r > 0)
+    if (c === 0 && r === 0) {
+      clearRemoteGrid(tab);
+      return true;
+    }
+    if (
+      Number.isFinite(c) &&
+      Number.isFinite(r) &&
+      c >= 1 &&
+      c <= MAX_REMOTE_GRID_COLS &&
+      r >= 1 &&
+      r <= MAX_REMOTE_GRID_ROWS
+    )
       applyRemoteGrid(tab, c, r);
-    else clearRemoteGrid(tab);
     return true;
   });
 

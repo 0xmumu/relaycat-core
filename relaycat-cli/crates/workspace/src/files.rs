@@ -30,6 +30,7 @@ const IGNORED_DIRECTORIES: &[&str] = &[
 ];
 const FILE_SEARCH_RESULT_LIMIT: usize = 100;
 const FILE_SEARCH_SCAN_LIMIT: usize = 20_000;
+const MAX_DIRECTORY_SCAN_ENTRIES: usize = 20_000;
 
 #[derive(Debug, Clone)]
 pub struct FileService { root: ProjectRoot }
@@ -40,8 +41,17 @@ impl FileService {
     pub fn list(&self, path: &str, offset: u16, limit: u16) -> Result<DirectoryPage, WorkspaceServiceError> {
         let directory = self.root.resolve(path)?;
         if !directory.is_dir() { return Err(WorkspaceServiceError::invalid("path is not a directory")); }
+        // When capped, sorting is over the first-scanned subset of the directory.
         let mut entries = Vec::new();
-        for item in fs::read_dir(&directory).map_err(WorkspaceServiceError::io)? {
+        let mut scan_capped = false;
+        for (scanned, item) in fs::read_dir(&directory)
+            .map_err(WorkspaceServiceError::io)?
+            .enumerate()
+        {
+            if scanned >= MAX_DIRECTORY_SCAN_ENTRIES {
+                scan_capped = true;
+                break;
+            }
             let item = item.map_err(WorkspaceServiceError::io)?;
             let resolved = match item.path().canonicalize() { Ok(value) if value.starts_with(self.root.path()) => value, _ => continue };
             let metadata = fs::metadata(&resolved).map_err(WorkspaceServiceError::io)?;
@@ -64,7 +74,7 @@ impl FileService {
             (false, true) => Ordering::Greater,
             _ => left.name.to_lowercase().cmp(&right.name.to_lowercase()).then_with(|| left.name.cmp(&right.name)),
         });
-        let capped = entries.len() > WORKSPACE_DIRECTORY_ENTRY_LIMIT as usize;
+        let capped = scan_capped || entries.len() > WORKSPACE_DIRECTORY_ENTRY_LIMIT as usize;
         entries.truncate(WORKSPACE_DIRECTORY_ENTRY_LIMIT as usize);
         let start = usize::from(offset).min(entries.len());
         let requested = usize::from(limit.clamp(1, WORKSPACE_DIRECTORY_PAGE_SIZE));
@@ -100,15 +110,20 @@ impl FileService {
                 _ => continue,
             };
             if !visited_directories.insert(canonical_directory) { continue; }
-            let mut children = fs::read_dir(&directory)
-                .map_err(WorkspaceServiceError::io)?
-                .filter_map(Result::ok)
-                .collect::<Vec<_>>();
+            let mut children = Vec::new();
+            for item in fs::read_dir(&directory).map_err(WorkspaceServiceError::io)? {
+                if scanned >= FILE_SEARCH_SCAN_LIMIT
+                    || children.len() >= MAX_DIRECTORY_SCAN_ENTRIES
+                {
+                    scan_capped = true;
+                    break;
+                }
+                scanned += 1;
+                children.push(item.map_err(WorkspaceServiceError::io)?);
+            }
             children.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
             let mut child_directories = Vec::new();
             for item in children {
-                if scanned >= FILE_SEARCH_SCAN_LIMIT { scan_capped = true; break; }
-                scanned += 1;
                 let resolved = match item.path().canonicalize() {
                     Ok(path) if path.starts_with(self.root.path()) => path,
                     _ => continue,

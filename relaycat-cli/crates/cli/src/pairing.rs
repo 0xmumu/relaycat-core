@@ -4,17 +4,29 @@ use image::Luma;
 use qrcode::{EcLevel, QrCode, types::Color};
 use rand_core::{OsRng, RngCore};
 use relaycat_crypto::KeyPair;
-use std::path::Path;
+use std::{fmt, path::Path};
 
 use crate::command::SessionKind;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PairingMaterial {
     pub relay_url: String,
     pub room_id: String,
     pub cli_public_key: [u8; 32],
     pub pairing_token: Vec<u8>,
     pub session_kind: SessionKind,
+}
+
+impl fmt::Debug for PairingMaterial {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PairingMaterial")
+            .field("relay_url", &self.relay_url)
+            .field("room_id", &self.room_id)
+            .field("cli_public_key", &self.cli_public_key)
+            .field("pairing_token", &"<redacted>")
+            .field("session_kind", &self.session_kind)
+            .finish()
+    }
 }
 
 pub fn generate_pairing_material(relay_url: impl Into<String>) -> PairingMaterial {
@@ -246,4 +258,24 @@ fn decode_token(value: &str) -> Result<Vec<u8>> {
 
 fn decode_session_kind(value: &str) -> Result<SessionKind> {
     SessionKind::new(percent_decode_query_value(value)?)
+}
+
+#[cfg(test)]
+mod debug_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_pairing_token() {
+        let token = vec![0xab; 16];
+        let material = PairingMaterial {
+            relay_url: "wss://example.test".into(),
+            room_id: "room".into(),
+            cli_public_key: [0xcd; 32],
+            pairing_token: token.clone(),
+            session_kind: SessionKind::shell(),
+        };
+        let debug = format!("{material:?}");
+        assert!(!debug.contains(&URL_SAFE_NO_PAD.encode(&token)));
+        assert!(debug.contains("<redacted>"));
+    }
 }

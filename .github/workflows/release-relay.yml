@@ -32,12 +32,15 @@ jobs:
       - name: Resolve version
         id: version
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            raw="${{ inputs.version }}"
+            raw="$INPUT_VERSION"
           else
-            raw="${{ github.ref_name }}"
+            raw="$REF_NAME"
             raw="${raw#relaycat-relay-}"
           fi
           version="${raw#v}"
