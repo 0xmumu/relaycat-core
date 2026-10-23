@@ -35,11 +35,14 @@ pub(crate) fn negotiate_capabilities(peer: &[ProtocolCapabilityV2]) -> Vec<Proto
 
 /// Highest protocol version both peers support, or `None` when the peer only
 /// speaks versions this CLI does not (no silent fallback to v2).
+///
+/// Version 0 is not a defined protocol: accepting it would let a peer
+/// negotiate a version whose framing this build never implemented.
 pub(crate) fn negotiated_protocol_version(peer_versions: &[u16]) -> Option<u16> {
     peer_versions
         .iter()
         .copied()
-        .filter(|version| *version <= TERMINAL_STATE_PROTOCOL_V2)
+        .filter(|version| (1..=TERMINAL_STATE_PROTOCOL_V2).contains(version))
         .max()
 }
 
@@ -96,6 +99,8 @@ mod tests {
     fn rejects_when_no_shared_version() {
         assert_eq!(negotiated_protocol_version(&[3, 4]), None);
         assert_eq!(negotiated_protocol_version(&[]), None);
+        // Version 0 is not a defined protocol.
+        assert_eq!(negotiated_protocol_version(&[0]), None);
 
         let rejected = hello_ack_for(&hello(vec![3], cli_protocol_capabilities()))
             .expect_err("newer-only peer must be rejected");
