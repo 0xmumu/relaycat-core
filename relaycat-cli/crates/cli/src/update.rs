@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use base64::Engine as _;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -15,6 +16,21 @@ use crate::{args::UpdateArgs, config, i18n::CliLanguage};
 
 pub const DEFAULT_CLI_MANIFEST_URL: &str = "https://www.relaycat.cn/update/cli.json";
 pub const FALLBACK_CLI_MANIFEST_URL: &str = "https://relaycat.app/update/cli.json";
+
+/// Hosts allowed to drive a **self-replacement**. A custom `--manifest-url`
+/// (a mirror, an internal proxy) may still download and verify, but never
+/// overwrites the running executable: otherwise anyone who can point the CLI
+/// at their manifest gets code execution on the next update.
+const OFFICIAL_MANIFEST_HOSTS: [&str; 2] = ["www.relaycat.cn", "relaycat.app"];
+
+/// Ed25519 public key (base64, 32 bytes) that must sign every update before it
+/// is installed. Empty until the release pipeline provisions a key.
+///
+/// While it is empty, TLS to the official host plus the SHA-256 check are the
+/// only anchors, and self-replacement is refused for any non-official
+/// manifest. Set this constant (and sign `downloads[].sha256`) to make the
+/// update chain verifiable end to end.
+const CLI_UPDATE_PUBLIC_KEY: &str = "";
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CliUpdateManifest {
@@ -47,6 +63,11 @@ pub struct CliUpdateDownload {
     pub kind: String,
     #[serde(default)]
     pub size_bytes: Option<u64>,
+    /// Base64 Ed25519 signature over the raw 32-byte `sha256` digest. Required
+    /// once [`CLI_UPDATE_PUBLIC_KEY`] is provisioned: SHA-256 alone proves
+    /// nothing, because the expected digest comes from the same manifest.
+    #[serde(default)]
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -214,25 +235,42 @@ fn run_update_command_blocking(
         manifest.latest_version,
         output.display()
     );
+    // Check the publisher's signature before spending bandwidth on the
+    // download; it pins the digest the payload is verified against below.
+    verify_download_signature(download)?;
     download_url_to_path(&download.url, &output)?;
     verify_sha256(&output, &download.sha256)?;
     verify_download_size(&output, download.size_bytes)?;
     println!("{}", language.t("Checksum verified.", "校验通过。"));
 
     let plan = DownloadInstallPlan::for_target(&download.target, &download.kind);
-    if download_only || !plan.can_replace_current_exe {
+    // Self-replacement is only allowed from an official manifest: a custom
+    // `--manifest-url` (mirror, internal proxy) may download, never overwrite
+    // the running executable.
+    let trusted_manifest = manifest_is_official(manifest_url);
+    if download_only || !plan.can_replace_current_exe || !trusted_manifest {
         println!(
             "{} {}",
             language.t("Downloaded update:", "升级文件已下载："),
             output.display()
         );
-        println!(
-            "{}",
-            language.t(
-                "Install it manually, or publish a direct non-Windows binary to enable self-replacement.",
-                "请手动安装；非 Windows 直连二进制可启用自动替换。",
-            )
-        );
+        if !trusted_manifest {
+            println!(
+                "{}",
+                language.t(
+                    "This manifest is not an official RelayCat host, so the downloaded file was not installed. Install it manually or rerun with the default manifest URL.",
+                    "该升级清单不是 RelayCat 官方地址，已下载但未自动替换。请手动安装，或使用默认清单地址重试。",
+                )
+            );
+        } else {
+            println!(
+                "{}",
+                language.t(
+                    "Install it manually, or publish a direct non-Windows binary to enable self-replacement.",
+                    "请手动安装；非 Windows 直连二进制可启用自动替换。",
+                )
+            );
+        }
         return Ok(());
     }
 
@@ -399,6 +437,71 @@ fn verify_sha256(path: &Path, expected_hex: &str) -> Result<()> {
         bail!("checksum mismatch: expected {expected_hex}, got {actual}");
     }
     Ok(())
+}
+
+/// Verifies `downloads[].signature` against the pinned key.
+///
+/// The signature covers the raw 32-byte SHA-256 digest, which is what pins the
+/// bytes: a forged manifest cannot re-sign a different binary without the
+/// release key, so the digest check and the signature check reinforce each
+/// other instead of both coming from the same untrusted document.
+fn verify_download_signature(download: &CliUpdateDownload) -> Result<()> {
+    verify_download_signature_with_key(CLI_UPDATE_PUBLIC_KEY, download)
+}
+
+fn verify_download_signature_with_key(
+    public_key_b64: &str,
+    download: &CliUpdateDownload,
+) -> Result<()> {
+    let public_key_b64 = public_key_b64.trim();
+    if public_key_b64.is_empty() {
+        // No key provisioned in this build; the caller additionally refuses to
+        // self-replace unless the manifest came from an official host.
+        return Ok(());
+    }
+    let public_key = base64::engine::general_purpose::STANDARD
+        .decode(public_key_b64)
+        .context("invalid pinned update key")?;
+    let signature = download
+        .signature
+        .as_deref()
+        .context("update download is not signed")?;
+    let signature = base64::engine::general_purpose::STANDARD
+        .decode(signature)
+        .context("invalid update signature")?;
+    let digest = sha256_digest_bytes(&download.sha256)?;
+
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, &public_key)
+        .verify(&digest, &signature)
+        .map_err(|_| anyhow::anyhow!("update signature verification failed"))
+}
+
+fn sha256_digest_bytes(hex: &str) -> Result<[u8; 32]> {
+    let hex = hex.trim();
+    if hex.len() != 64 {
+        bail!("invalid sha256 digest");
+    }
+    let mut digest = [0_u8; 32];
+    for (index, chunk) in hex.as_bytes().chunks(2).enumerate() {
+        let pair = std::str::from_utf8(chunk).context("invalid sha256 digest")?;
+        digest[index] = u8::from_str_radix(pair, 16).context("invalid sha256 digest")?;
+    }
+    Ok(digest)
+}
+
+/// Whether a manifest URL may drive self-replacement.
+fn manifest_is_official(url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    OFFICIAL_MANIFEST_HOSTS.contains(&host.as_str())
 }
 
 fn verify_download_size(path: &Path, expected_size: Option<u64>) -> Result<()> {
@@ -573,5 +676,53 @@ mod tests {
         ));
         fs::create_dir_all(&path).expect("create temp dir");
         path
+    }
+
+    #[test]
+    fn a_pinned_key_rejects_unsigned_or_tampered_downloads() {
+        use ring::rand::SystemRandom;
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).unwrap();
+        let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+        let public =
+            base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
+        let digest = [0x11_u8; 32];
+        let signature = base64::engine::general_purpose::STANDARD
+            .encode(key_pair.sign(&digest).as_ref());
+
+        let mut download = CliUpdateDownload {
+            target: "aarch64-apple-darwin".into(),
+            url: "https://example.com/relaycat".into(),
+            sha256: "11".repeat(32),
+            kind: "binary".into(),
+            size_bytes: None,
+            signature: Some(signature),
+        };
+        assert!(verify_download_signature_with_key(&public, &download).is_ok());
+
+        // Same digest value, signature does not match it.
+        download.sha256 = "22".repeat(32);
+        assert!(verify_download_signature_with_key(&public, &download).is_err());
+
+        // Missing signature is a hard failure once a key is pinned.
+        download.sha256 = "11".repeat(32);
+        download.signature = None;
+        assert!(verify_download_signature_with_key(&public, &download).is_err());
+
+        // An unprovisioned key is a no-op; the official-host check still gates
+        // self-replacement.
+        assert!(verify_download_signature_with_key("", &download).is_ok());
+    }
+
+    #[test]
+    fn only_official_https_manifests_may_self_replace() {
+        assert!(manifest_is_official("https://www.relaycat.cn/update/cli.json"));
+        assert!(manifest_is_official("https://relaycat.app/update/cli.json"));
+        assert!(!manifest_is_official("http://www.relaycat.cn/update/cli.json"));
+        assert!(!manifest_is_official("https://evil.example/update/cli.json"));
+        assert!(!manifest_is_official(
+            "https://www.relaycat.cn.evil.example/update/cli.json"
+        ));
     }
 }

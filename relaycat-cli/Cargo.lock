@@ -1667,6 +1667,7 @@ dependencies = [
  "relaycat-protocol",
  "relaycat-workspace",
  "reqwest",
+ "ring",
  "rustls",
  "semver",
  "serde",
