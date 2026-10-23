@@ -186,16 +186,34 @@ pub fn write_pairing_qr_pngs(project_dir: &Path, material: &PairingMaterial) -> 
     let latest = latest_pairing_qr_png_path(project_dir, &material.session_kind);
     let dir = pairing_qr_dir(project_dir);
     fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    // The QR encodes the pairing URL, i.e. the token: keep the directory and
+    // the PNGs readable by the owner only. Without this a project directory
+    // that is shared, synced or backed up leaks a 24h pairing credential.
+    restrict_to_owner(&dir, 0o700)?;
 
     crate::pairing::write_pairing_qr_png(material, &path)?;
+    restrict_to_owner(&path, 0o600)?;
     fs::copy(&path, &latest).with_context(|| {
         format!(
             "failed to update latest pairing QR PNG {}",
             latest.display()
         )
     })?;
+    restrict_to_owner(&latest, 0o600)?;
 
     Ok(path)
+}
+
+#[cfg(unix)]
+fn restrict_to_owner(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .with_context(|| format!("failed to set permissions on {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn restrict_to_owner(_path: &Path, _mode: u32) -> Result<()> {
+    Ok(())
 }
 
 pub fn load_session(path: &Path) -> Result<Option<StoredPairingSession>> {

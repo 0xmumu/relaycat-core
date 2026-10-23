@@ -194,6 +194,23 @@ fn write_pairing_qr_pngs_writes_unique_file_and_latest_copy() {
         std::fs::read(&latest).expect("read latest"),
         std::fs::read(&path).expect("read unique")
     );
+
+    // The PNG embeds the pairing URL (and therefore the token): it must not
+    // be readable by other local users.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let dir_mode = std::fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(dir_mode, 0o700);
+        for file in [&path, &latest] {
+            let mode = std::fs::metadata(file).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{} must be owner-only", file.display());
+        }
+    }
 }
 
 fn tempfile_dir(prefix: &str) -> std::path::PathBuf {
