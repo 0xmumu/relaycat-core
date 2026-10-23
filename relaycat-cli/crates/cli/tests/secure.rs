@@ -224,7 +224,7 @@ fn cli_secure_handshake_mixes_connection_salts_when_app_provides_one() {
         handshake.cli_public(),
         app.public(),
         &pairing_token_hash(&token),
-        &handshake.connection_salt(),
+        &handshake.connection_salt().unwrap(),
         &app_salt,
     );
     assert_eq!(keys, expected);
@@ -276,7 +276,7 @@ fn secure_join_frame_binds_cli_proof_to_its_connection_salt() {
     let cli = KeyPair::from_private_bytes([51; 32]);
     let handshake = CliSecureHandshake::new("room-1", cli, [52; 32]);
 
-    let frame = secure_join_frame(&handshake);
+    let frame = secure_join_frame(&handshake).unwrap();
     let OuterFrame::Join {
         room_id,
         role,
@@ -294,7 +294,7 @@ fn secure_join_frame_binds_cli_proof_to_its_connection_salt() {
     assert_eq!(role, Role::Cli);
     assert_eq!(device_pubkey, handshake.cli_public());
     // The stable CLI salt must be present and recorded as the handshake's current salt.
-    let salt = handshake.connection_salt();
+    let salt = handshake.connection_salt().unwrap();
     assert_eq!(connection_salt, Some(salt));
     // The CLI now proves token possession and binds the proof to that salt.
     assert_eq!(
@@ -317,13 +317,13 @@ fn secure_join_frame_reuses_cli_salt_across_transport_reconnects() {
     let cli = KeyPair::from_private_bytes([53; 32]);
     let handshake = CliSecureHandshake::new("room-1", cli, [54; 32]);
 
-    let first = secure_join_frame(&handshake);
+    let first = secure_join_frame(&handshake).unwrap();
     let first_salt = join_proof_and_salt(&first).1.expect("first salt");
-    let second = secure_join_frame(&handshake);
+    let second = secure_join_frame(&handshake).unwrap();
     let second_salt = join_proof_and_salt(&second).1.expect("second salt");
 
     assert_eq!(second_salt, first_salt);
-    assert_eq!(handshake.connection_salt(), first_salt);
+    assert_eq!(handshake.connection_salt().unwrap(), first_salt);
 }
 
 fn pairing_token_proof_for(
@@ -352,8 +352,8 @@ fn app_secure_handshake_builds_join_frame_cli_accepts_and_keys_match() {
     // Both sides send their Join first, then each accepts the other's forwarded
     // PeerJoined. The app rotates a fresh salt for its connection; the CLI
     // advertises its stable salt so transport reconnects can preserve seq.
-    let cli_join = secure_join_frame(&cli_handshake);
-    let app_join = app_handshake.join_frame();
+    let cli_join = secure_join_frame(&cli_handshake).unwrap();
+    let app_join = app_handshake.join_frame().unwrap();
     let (cli_proof, cli_salt) = join_proof_and_salt(&cli_join);
     let (app_proof, app_salt) = join_proof_and_salt(&app_join);
     assert!(cli_salt.is_some(), "cli join must carry a connection salt");
@@ -398,10 +398,10 @@ fn cli_rederives_keys_matching_app_after_transport_reconnect_with_stable_salt() 
         AppSecureHandshake::new(material.clone(), KeyPair::from_private_bytes([73; 32]));
 
     // No app has joined yet: nothing to rederive from.
-    let _ = secure_join_frame(&cli_handshake);
+    let _ = secure_join_frame(&cli_handshake).unwrap();
     assert!(cli_handshake.rederive_session_keys().is_none());
 
-    let app_join = app_handshake.join_frame();
+    let app_join = app_handshake.join_frame().unwrap();
     let (app_proof, app_salt) = join_proof_and_salt(&app_join);
     cli_handshake
         .accept_peer_joined(&OuterFrame::PeerJoined {
@@ -413,12 +413,12 @@ fn cli_rederives_keys_matching_app_after_transport_reconnect_with_stable_salt() 
         .expect("cli accept")
         .expect("cli keys");
 
-    let initial_cli_salt = cli_handshake.connection_salt();
+    let initial_cli_salt = cli_handshake.connection_salt().unwrap();
 
     // The CLI's transport drops and it rejoins with the same salt. The app
     // stays in the room, sees PeerJoined(cli, same salt), and must derive the
     // same keys without either side resetting sequence counters.
-    let cli_rejoin = secure_join_frame(&cli_handshake);
+    let cli_rejoin = secure_join_frame(&cli_handshake).unwrap();
     let (cli_proof, cli_salt) = join_proof_and_salt(&cli_rejoin);
     assert_eq!(cli_salt, Some(initial_cli_salt));
     let app_keys = app_handshake

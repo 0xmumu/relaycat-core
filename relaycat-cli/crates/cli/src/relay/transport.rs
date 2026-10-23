@@ -141,7 +141,7 @@ impl RelayTransportReconnect {
                 let (mut ws_writer, ws_reader) = socket.split();
                 ws_send(
                     &mut ws_writer,
-                    Message::Binary(encode_frame(&secure_join_frame(handshake))?.into()),
+                    Message::Binary(encode_frame(&secure_join_frame(handshake)?)?.into()),
                 )
                 .await
                 .context("failed to send secure join frame")?;

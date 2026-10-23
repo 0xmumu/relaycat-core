@@ -66,22 +66,28 @@ impl CliSecureHandshake {
     /// This is intentionally not called for ordinary CLI/GUI transport
     /// reconnects: those reconnects preserve the existing `SecureSession` and
     /// sequence counters.
-    pub fn rotate_connection_salt(&self) -> [u8; 32] {
+    pub fn rotate_connection_salt(&self) -> Result<[u8; 32]> {
         let salt = generate_connection_salt();
-        if let Ok(mut guard) = self.connection_salt.lock() {
-            *guard = salt;
-        }
-        salt
+        let mut guard = self
+            .connection_salt
+            .lock()
+            .map_err(|_| anyhow::anyhow!("secure connection salt lock poisoned"))?;
+        *guard = salt;
+        Ok(salt)
     }
 
     /// Returns the salt sent in CLI `Join` frames. This is the salt the peer
     /// learns via `PeerJoined`, so it must be the one mixed in when deriving
     /// keys from the peer's `PeerJoined`.
-    pub fn connection_salt(&self) -> [u8; 32] {
+    ///
+    /// A poisoned lock is an error, never a zero salt: silently deriving keys
+    /// from a constant salt would repeat the per-connection key and reuse
+    /// ChaCha20-Poly1305 nonces across reconnects.
+    pub fn connection_salt(&self) -> Result<[u8; 32]> {
         self.connection_salt
             .lock()
             .map(|guard| *guard)
-            .unwrap_or([0_u8; 32])
+            .map_err(|_| anyhow::anyhow!("secure connection salt lock poisoned"))
     }
 
     pub fn room_id(&self) -> &str {
@@ -139,7 +145,7 @@ impl CliSecureHandshake {
         }
 
         let token_hash = pairing_token_hash(&self.pairing_token);
-        let cli_salt = self.connection_salt();
+        let cli_salt = self.connection_salt()?;
         Ok(Some(SessionKeys::derive_for_cli(
             self.room_id.as_bytes(),
             self.cli_keypair.private(),
@@ -158,7 +164,7 @@ impl CliSecureHandshake {
     pub fn rederive_session_keys(&self) -> Option<SessionKeys> {
         let peer = (*self.app_peer.lock().ok()?)?;
         let token_hash = pairing_token_hash(&self.pairing_token);
-        let cli_salt = self.connection_salt();
+        let cli_salt = self.connection_salt().ok()?;
         Some(SessionKeys::derive_for_cli(
             self.room_id.as_bytes(),
             self.cli_keypair.private(),
@@ -199,25 +205,28 @@ impl AppSecureHandshake {
     }
 
     /// Draws a fresh per-connection salt and stores it as the current salt.
-    pub fn rotate_connection_salt(&self) -> [u8; 32] {
+    pub fn rotate_connection_salt(&self) -> Result<[u8; 32]> {
         let salt = generate_connection_salt();
-        if let Ok(mut guard) = self.connection_salt.lock() {
-            *guard = salt;
-        }
-        salt
+        let mut guard = self
+            .connection_salt
+            .lock()
+            .map_err(|_| anyhow::anyhow!("secure connection salt lock poisoned"))?;
+        *guard = salt;
+        Ok(salt)
     }
 
-    /// Returns the salt sent in the most recent `Join`.
-    pub fn connection_salt(&self) -> [u8; 32] {
+    /// Returns the salt sent in the most recent `Join`. A poisoned lock is an
+    /// error rather than a zero salt (see `CliSecureHandshake::connection_salt`).
+    pub fn connection_salt(&self) -> Result<[u8; 32]> {
         self.connection_salt
             .lock()
             .map(|guard| *guard)
-            .unwrap_or([0_u8; 32])
+            .map_err(|_| anyhow::anyhow!("secure connection salt lock poisoned"))
     }
 
-    pub fn join_frame(&self) -> OuterFrame {
-        let app_salt = self.rotate_connection_salt();
-        OuterFrame::Join {
+    pub fn join_frame(&self) -> Result<OuterFrame> {
+        let app_salt = self.rotate_connection_salt()?;
+        Ok(OuterFrame::Join {
             room_id: self.material.room_id.clone(),
             role: Role::App,
             device_pubkey: self.app_keypair.public(),
@@ -235,7 +244,7 @@ impl AppSecureHandshake {
             connection_salt: Some(app_salt),
             supports_join_accepted: false,
             app_join_intent: AppJoinIntent::Takeover,
-        }
+        })
     }
 
     /// Verifies the CLI peer's salt-bound proof from `PeerJoined` and derives
@@ -274,16 +283,16 @@ impl AppSecureHandshake {
             bail!("invalid pairing token proof");
         }
 
-        Ok(Some(self.session_keys(cli_salt)))
+        Ok(Some(self.session_keys(cli_salt)?))
     }
 
     /// Derives the session keys for the app, mixing in the CLI's per-connection
     /// salt (learned from and authenticated via `PeerJoined`) together with
     /// this connection's own app salt.
-    pub fn session_keys(&self, cli_connection_salt: &[u8; 32]) -> SessionKeys {
+    pub fn session_keys(&self, cli_connection_salt: &[u8; 32]) -> Result<SessionKeys> {
         let token_hash = pairing_token_hash(&self.material.pairing_token);
-        let app_salt = self.connection_salt();
-        SessionKeys::derive_for_app(
+        let app_salt = self.connection_salt()?;
+        Ok(SessionKeys::derive_for_app(
             self.material.room_id.as_bytes(),
             self.app_keypair.private(),
             self.material.cli_public_key,
@@ -292,13 +301,13 @@ impl AppSecureHandshake {
             &token_hash,
             cli_connection_salt,
             &app_salt,
-        )
+        ))
     }
 }
 
-pub fn secure_join_frame(handshake: &CliSecureHandshake) -> OuterFrame {
-    let cli_salt = handshake.connection_salt();
-    OuterFrame::Join {
+pub fn secure_join_frame(handshake: &CliSecureHandshake) -> Result<OuterFrame> {
+    let cli_salt = handshake.connection_salt()?;
+    Ok(OuterFrame::Join {
         room_id: handshake.room_id().to_string(),
         role: Role::Cli,
         device_pubkey: handshake.cli_public(),
@@ -320,7 +329,7 @@ pub fn secure_join_frame(handshake: &CliSecureHandshake) -> OuterFrame {
         connection_salt: Some(cli_salt),
         supports_join_accepted: false,
         app_join_intent: AppJoinIntent::Takeover,
-    }
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -621,5 +630,29 @@ pub fn crypto_direction(direction: Direction) -> CryptoDirection {
     match direction {
         Direction::CliToApp => CryptoDirection::CliToApp,
         Direction::AppToCli => CryptoDirection::AppToCli,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_poisoned_salt_lock_is_an_error_not_a_zero_salt() {
+        let handshake = CliSecureHandshake::new("room", KeyPair::generate(), vec![1_u8; 16]);
+        let salt_mutex = &handshake.connection_salt;
+        let result = std::thread::scope(|scope| {
+            let _ = scope
+                .spawn(|| {
+                    let _guard = salt_mutex.lock().unwrap();
+                    panic!("poison the salt lock");
+                })
+                .join();
+            handshake.connection_salt()
+        });
+        assert!(
+            result.is_err(),
+            "a poisoned salt lock must fail the handshake, never fall back to an all-zero salt"
+        );
     }
 }

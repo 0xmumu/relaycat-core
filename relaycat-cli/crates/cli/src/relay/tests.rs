@@ -2157,7 +2157,7 @@ fn secure_peer_rejoin_resets_transport_sequences() {
         handshake.cli_public(),
         second_app.public(),
         &pairing_token_hash(&token),
-        &handshake.connection_salt(),
+        &handshake.connection_salt().unwrap(),
         &second_app_salt,
     );
     assert_eq!(
@@ -2188,7 +2188,7 @@ fn secure_peer_joined_with_unchanged_keys_preserves_sessions() {
         handshake.cli_public(),
         app.public(),
         &pairing_token_hash(&token),
-        &handshake.connection_salt(),
+        &handshake.connection_salt().unwrap(),
         &app_salt,
     );
     let output_session = Arc::new(Mutex::new(SecureSession::new(room_id, current.clone())));
