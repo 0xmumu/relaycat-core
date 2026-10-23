@@ -175,10 +175,17 @@ impl GitService {
     pub fn diff(&self, target: GitDiffTarget, cursor: Option<String>, max_bytes: u32) -> Result<ContentPage, WorkspaceServiceError> {
         let mut args = vec!["diff".to_string(), "--no-ext-diff".into(), "--no-color".into()];
         match target {
-            GitDiffTarget::WorkingTree => {}
-            GitDiffTarget::Staged => args.push("--cached".into()),
+            GitDiffTarget::WorkingTree => args.extend(["--".into(), ".".into()]),
+            GitDiffTarget::Staged => {
+                args.push("--cached".into());
+                args.extend(["--".into(), ".".into()]);
+            }
             GitDiffTarget::Path { path, staged } => { self.validate_paths(std::slice::from_ref(&path))?; if staged { args.push("--cached".into()); } args.push("--".into()); args.push(path); }
-            GitDiffTarget::Commit { oid } => { validate_oid(&oid)?; args.push(format!("{oid}^!")); }
+            GitDiffTarget::Commit { oid } => {
+                validate_oid(&oid)?;
+                args.push(format!("{oid}^!"));
+                args.extend(["--".into(), ".".into()]);
+            }
         }
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self.output(&refs)?; self.success(&output)?;
@@ -226,7 +233,7 @@ impl GitService {
         let history = self.text(&["show", "-s", "--date=unix", "--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%at%x1f%D%x1f%P", oid])?;
         let item = parse_history_item(&history).ok_or_else(|| WorkspaceServiceError::invalid("invalid commit detail"))?;
         let body = self.text(&["show", "-s", "--pretty=format:%B", oid])?;
-        let names = self.text(&["diff-tree", "--no-commit-id", "--name-status", "-r", oid])?;
+        let names = self.text(&["diff-tree", "--no-commit-id", "--name-status", "-r", oid, "--", "."])?;
         let changed_paths = names.lines().filter_map(|line| { let mut f=line.splitn(2,'\t'); Some(GitChange { status:f.next()?.to_lowercase(), path:f.next()?.to_string(), old_path:None, staged:false }) }).collect();
         let diff = self.diff(GitDiffTarget::Commit { oid: oid.into() }, cursor, max_bytes)?;
         Ok(GitCommitDetail { item, body, changed_paths, diff })
@@ -291,24 +298,46 @@ impl GitService {
         self.success(&output)?;
         self.mutation_result()
     }
-    pub fn checkout(&self, reference:&str)->Result<GitMutationResult,WorkspaceServiceError>{if reference.is_empty()||reference.starts_with('-'){return Err(WorkspaceServiceError::invalid("invalid ref"));}self.simple_mutation(&["switch",reference])}
+    pub fn checkout(&self, reference:&str)->Result<GitMutationResult,WorkspaceServiceError>{if reference.is_empty()||reference.starts_with('-'){return Err(WorkspaceServiceError::invalid("invalid ref"));}self.reject_nested_operation("checkout")?;self.simple_mutation(&["switch",reference])}
     pub fn create_branch(&self,name:&str,start:&str)->Result<GitMutationResult,WorkspaceServiceError>{self.validate_branch(name)?;if start.starts_with('-'){return Err(WorkspaceServiceError::invalid("invalid start point"));}let mut a=vec!["switch","-c",name];if !start.is_empty(){a.push(start);}self.simple_mutation(&a)}
     pub fn rename_branch(&self,name:&str)->Result<GitMutationResult,WorkspaceServiceError>{self.validate_branch(name)?;self.simple_mutation(&["branch","-m",name])}
     pub fn delete_branch(&self,name:&str,force:bool)->Result<GitMutationResult,WorkspaceServiceError>{self.validate_branch(name)?;self.simple_mutation(&["branch",if force{"-D"}else{"-d"},name])}
     pub fn create_tag(&self,name:&str,target:&str)->Result<GitMutationResult,WorkspaceServiceError>{if name.is_empty()||target.is_empty()||name.starts_with('-')||target.starts_with('-'){return Err(WorkspaceServiceError::invalid("invalid tag"));}self.simple_mutation(&["tag",name,target])}
-    pub fn commit(&self,message:&str,amend:bool)->Result<GitMutationResult,WorkspaceServiceError>{if message.trim().is_empty()||message.len()>1024*1024{return Err(WorkspaceServiceError::invalid("invalid commit message"));}let path=write_commit_message_file(message)?;let p=path.to_string_lossy().into_owned();let result=if amend{self.simple_mutation(&["commit","-F",&p,"--amend"])}else{self.simple_mutation(&["commit","-F",&p])};let _=fs::remove_file(path);result}
+    pub fn commit(&self, message: &str, amend: bool) -> Result<GitMutationResult, WorkspaceServiceError> {
+        if message.trim().is_empty() || message.len() > 1024 * 1024 {
+            return Err(WorkspaceServiceError::invalid("invalid commit message"));
+        }
+        if self.is_nested()? {
+            if amend {
+                self.reject_nested_operation("amend")?;
+            }
+            self.reject_staged_paths_outside_project()?;
+        }
+        let path = write_commit_message_file(message)?;
+        let message_path = path.to_string_lossy().into_owned();
+        let result = if amend {
+            self.simple_mutation(&["commit", "-F", &message_path, "--amend"])
+        } else {
+            self.simple_mutation(&["commit", "-F", &message_path])
+        };
+        let _ = fs::remove_file(path);
+        result
+    }
     pub fn remote(&self,kind:GitRemoteOperation)->Result<GitMutationResult,WorkspaceServiceError>{self.remote_with_summary(kind).map(|outcome|outcome.mutation)}
     pub(crate) fn remote_with_summary(&self,kind:GitRemoteOperation)->Result<GitRemoteOutcome,WorkspaceServiceError>{
         let args:&[&str]=match kind{GitRemoteOperation::Fetch=>&["fetch","--progress","--prune"],GitRemoteOperation::Pull=>&["pull","--progress","--ff-only"],GitRemoteOperation::Push=>&["push","--progress"]};
         let _guard=self.lock_mutation()?;
+        if kind == GitRemoteOperation::Pull {
+            self.reject_nested_operation("pull")?;
+        }
         let before=self.remote_snapshot();
         self.run_success(args)?;
         let after=self.remote_snapshot();
         let messages=self.remote_messages(kind,&before,&after);
         Ok(GitRemoteOutcome{mutation:self.mutation_result()?,messages})
     }
-    pub fn commit_action(&self,kind:GitCommitAction,oid:&str)->Result<GitMutationResult,WorkspaceServiceError>{validate_oid(oid)?;self.simple_mutation(&[match kind{GitCommitAction::Revert=>"revert",GitCommitAction::CherryPick=>"cherry-pick"},oid])}
-    pub fn reset(&self,oid:&str,mode:GitResetMode)->Result<GitMutationResult,WorkspaceServiceError>{validate_oid(oid)?;self.simple_mutation(&["reset",match mode{GitResetMode::Soft=>"--soft",GitResetMode::Mixed=>"--mixed",GitResetMode::Hard=>"--hard"},oid])}
+    pub fn commit_action(&self,kind:GitCommitAction,oid:&str)->Result<GitMutationResult,WorkspaceServiceError>{validate_oid(oid)?;let operation=match kind{GitCommitAction::Revert=>"revert",GitCommitAction::CherryPick=>"cherry-pick"};self.reject_nested_operation(operation)?;self.simple_mutation(&[operation,oid])}
+    pub fn reset(&self,oid:&str,mode:GitResetMode)->Result<GitMutationResult,WorkspaceServiceError>{validate_oid(oid)?;self.reject_nested_operation("reset")?;self.simple_mutation(&["reset",match mode{GitResetMode::Soft=>"--soft",GitResetMode::Mixed=>"--mixed",GitResetMode::Hard=>"--hard"},oid])}
 
     fn paths_mutation(&self,prefix:&[&str],paths:&[String])->Result<GitMutationResult,WorkspaceServiceError>{let _guard=self.lock_mutation()?;self.validate_paths(paths)?;let mut args:Vec<&str>=prefix.to_vec();args.push("--");args.extend(paths.iter().map(String::as_str));self.run_success(&args)?;self.mutation_result()}
     fn simple_mutation(&self,args:&[&str])->Result<GitMutationResult,WorkspaceServiceError>{let _guard=self.lock_mutation()?;self.run_success(args)?;self.mutation_result()}
@@ -335,6 +364,26 @@ impl GitService {
     fn repository_root(&self)->Result<PathBuf,WorkspaceServiceError>{
         let root=self.text(&["rev-parse","--show-toplevel"])?;
         PathBuf::from(root.trim()).canonicalize().map_err(WorkspaceServiceError::io)
+    }
+    fn is_nested(&self)->Result<bool,WorkspaceServiceError>{Ok(self.repository_root()?!=self.root.path())}
+    fn reject_nested_operation(&self,operation:&str)->Result<(),WorkspaceServiceError>{
+        let repository_root=self.repository_root()?;
+        if repository_root!=self.root.path(){
+            return Err(WorkspaceServiceError::invalid(format!("this project is a subdirectory of the Git repository at {}; {operation} affects the whole repository and is disabled here",repository_root.display())));
+        }
+        Ok(())
+    }
+    fn reject_staged_paths_outside_project(&self)->Result<(),WorkspaceServiceError>{
+        let repository_root=self.repository_root()?;
+        let output=self.output(&["-c","core.quotepath=off","diff","--cached","--name-only","-z"])?;
+        self.success(&output)?;
+        for raw in output.stdout.split(|byte|*byte==0).filter(|path|!path.is_empty()){
+            let path=String::from_utf8_lossy(raw);
+            if self.project_relative_git_path(&repository_root,&path).is_err(){
+                return Err(WorkspaceServiceError::invalid(format!("staged changes outside this project: {path}; commit them from the repository root")));
+            }
+        }
+        Ok(())
     }
     fn project_relative_git_path(&self,repository_root:&Path,path:&str)->Result<String,WorkspaceServiceError>{
         let absolute=repository_root.join(path);
@@ -744,6 +793,129 @@ mod tests {
             .stderr(Stdio::null());
         init.status().unwrap();
         path
+    }
+
+    fn git(repo: &Path, args: &[&str]) -> Output {
+        Command::new("git")
+            .current_dir(repo)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    fn commit_all(repo: &Path, message: &str) {
+        assert!(git(repo, &["add", "-A"]).status.success());
+        assert!(git(
+            repo,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--quiet",
+                "-m",
+                message,
+            ],
+        )
+        .status.success());
+    }
+
+    fn nested_project(label: &str) -> (PathBuf, GitService) {
+        let repo = temp_repo(label);
+        fs::create_dir_all(repo.join("proj")).unwrap();
+        fs::write(repo.join("proj/inside.txt"), "inside base\n").unwrap();
+        fs::write(repo.join("other.txt"), "outside base\n").unwrap();
+        commit_all(&repo, "base");
+        let service = GitService::new(ProjectRoot::open(repo.join("proj")).unwrap());
+        (repo, service)
+    }
+
+    #[test]
+    fn nested_repository_git_operations_stay_inside_the_project() {
+        let (repo, service) = nested_project("nested-boundary");
+        fs::write(repo.join("proj/inside.txt"), "inside changed\n").unwrap();
+        fs::write(repo.join("other.txt"), "outside changed\n").unwrap();
+
+        let status = service.status().unwrap();
+        assert_eq!(status.changes.len(), 1);
+        assert_eq!(status.changes[0].path, "inside.txt");
+        assert!(!service
+            .diff(GitDiffTarget::WorkingTree, None, 64 * 1024)
+            .unwrap()
+            .bytes
+            .windows(b"other.txt".len())
+            .any(|window| window == b"other.txt"));
+
+        assert!(git(&repo, &["add", "-A"]).status.success());
+        assert!(!service
+            .diff(GitDiffTarget::Staged, None, 64 * 1024)
+            .unwrap()
+            .bytes
+            .windows(b"other.txt".len())
+            .any(|window| window == b"other.txt"));
+        commit_all(&repo, "outside staged");
+        let outside_commit = git(&repo, &["rev-parse", "HEAD"]);
+        let outside_oid = String::from_utf8_lossy(&outside_commit.stdout).trim().to_string();
+        let detail = service
+            .commit_detail(&outside_oid, None, 64 * 1024)
+            .unwrap();
+        assert!(detail.changed_paths.iter().all(|change| change.path != "other.txt"));
+        assert!(!detail
+            .diff
+            .bytes
+            .windows(b"other.txt".len())
+            .any(|window| window == b"other.txt"));
+
+        fs::write(repo.join("proj/inside.txt"), "inside commit\n").unwrap();
+        fs::write(repo.join("other.txt"), "outside staged again\n").unwrap();
+        assert!(git(&repo, &["add", "-A"]).status.success());
+        let error = service.commit("must be rejected", false).unwrap_err();
+        assert!(error.to_string().contains("staged changes outside this project: other.txt"));
+
+        assert!(git(&repo, &["reset", "--", "other.txt"]).status.success());
+        service.commit("project-only commit", false).unwrap();
+
+        for (operation, result) in [
+            ("checkout", service.checkout("HEAD").map(|_| ())),
+            ("reset", service.reset(&outside_oid, GitResetMode::Mixed).map(|_| ())),
+            (
+                "revert",
+                service
+                    .commit_action(GitCommitAction::Revert, &outside_oid)
+                    .map(|_| ()),
+            ),
+            (
+                "pull",
+                service.remote(GitRemoteOperation::Pull).map(|_| ()),
+            ),
+        ] {
+            let error = result.unwrap_err();
+            assert!(error.to_string().contains(operation));
+        }
+        assert!(service.commit("amend rejected", true).is_err());
+
+        let patch = "--- a/../other.txt\n+++ b/../other.txt\n@@ -1 +1 @@\n-outside staged again\n+patched outside\n";
+        let _ = service.apply_patch(patch, false, false);
+        assert_eq!(
+            fs::read_to_string(repo.join("other.txt")).unwrap(),
+            "outside staged again\n"
+        );
+        let _ = fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn non_nested_repository_commit_and_checkout_remain_available() {
+        let repo = temp_repo("non-nested-mutations");
+        fs::write(repo.join("file.txt"), "base\n").unwrap();
+        commit_all(&repo, "base");
+        let service = GitService::new(ProjectRoot::open(&repo).unwrap());
+        fs::write(repo.join("file.txt"), "changed\n").unwrap();
+        service.stage(&["file.txt".into()]).unwrap();
+        service.commit("project commit", false).unwrap();
+        let branch = service.summary().unwrap().branch;
+        service.checkout(&branch).unwrap();
+        let _ = fs::remove_dir_all(repo);
     }
 
     /// Regression: `git push`/`git fetch` spawn an ssh helper that inherits
