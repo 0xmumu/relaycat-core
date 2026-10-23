@@ -3,7 +3,7 @@ use relaycat_protocol::{
     DirectoryEntry, DirectoryPage, FilePreview, FileSearchPage, ImageVariant, WORKSPACE_DIRECTORY_ENTRY_LIMIT,
     WORKSPACE_DIRECTORY_PAGE_SIZE,
 };
-use std::{cmp::Ordering, collections::HashSet, fs, path::{Path, PathBuf}};
+use std::{cmp::Ordering, collections::HashSet, fs, io::Read, path::{Path, PathBuf}};
 
 pub const TEXT_PREVIEW_LIMIT: u64 = 512 * 1024;
 pub const IMAGE_PREVIEW_LIMIT: u64 = 1024 * 1024;
@@ -168,7 +168,22 @@ impl FileService {
         if metadata.len() > limit {
             return Ok(FilePreview::TooLarge { path: path.to_string(), size: metadata.len(), limit });
         }
-        let bytes = fs::read(&resolved).map_err(WorkspaceServiceError::io)?;
+        // Read through a length-limited handle instead of `fs::read`: the file
+        // can grow between the metadata check above and the read, and a plain
+        // read would then load the grown file (and report it as complete).
+        let mut file = fs::File::open(&resolved).map_err(WorkspaceServiceError::io)?;
+        let mut bytes = Vec::with_capacity((metadata.len().min(limit) as usize).saturating_add(1));
+        file.by_ref()
+            .take(limit.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(WorkspaceServiceError::io)?;
+        if bytes.len() as u64 > limit {
+            return Ok(FilePreview::TooLarge {
+                path: path.to_string(),
+                size: metadata.len().max(bytes.len() as u64),
+                limit,
+            });
+        }
         if let Some(mime) = image {
             let (width, height) = image_dimensions(mime, &bytes).unwrap_or((0, 0));
             if variant == ImageVariant::Thumbnail && (width > 512 || height > 512) {
