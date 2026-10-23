@@ -839,10 +839,14 @@ async fn reliable_plain_event_waits_for_output_queue_capacity() {
     assert!(send_task.await.expect("send task"));
     assert!(matches!(
         rx.recv().await,
-        Some(PtyEvent::Plain(PlainMsg::InputAckV2(InputAckV2 {
-            input_stream_id,
-            highest_contiguous_input_seq: 1,
-        }))) if input_stream_id == "stream-1"
+        Some(PtyEvent::Plain(msg))
+            if matches!(
+                &*msg,
+                PlainMsg::InputAckV2(InputAckV2 {
+                    input_stream_id,
+                    highest_contiguous_input_seq: 1,
+                }) if input_stream_id == "stream-1"
+            )
     ));
 }
 
@@ -2573,7 +2577,7 @@ fn resume_accepted_reflects_reply_contents() {
     );
 
     assert_eq!(
-        resume_accepted_for(&[snapshot.clone()], 0),
+        resume_accepted_for(std::slice::from_ref(&snapshot), 0),
         ResumeAcceptedV2 {
             mode: ResumeAcceptMode::SendingSnapshot,
             target_state_seq: 0,

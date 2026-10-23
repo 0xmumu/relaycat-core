@@ -723,15 +723,11 @@ pub(crate) fn split_dec_private_modes_excluding(
     sequence: &[u8],
     exclude: impl Fn(&[u8]) -> bool,
 ) -> Option<Vec<u8>> {
-    let Some((&final_byte, body)) = sequence.split_last() else {
-        return None;
-    };
+    let (&final_byte, body) = sequence.split_last()?;
     if !matches!(final_byte, b'h' | b'l') {
         return None;
     }
-    let Some(params) = body.strip_prefix(b"\x1b[?") else {
-        return None;
-    };
+    let params = body.strip_prefix(b"\x1b[?")?;
     let kept: Vec<&[u8]> = params
         .split(|byte| *byte == b';')
         .filter(|param| !exclude(param))

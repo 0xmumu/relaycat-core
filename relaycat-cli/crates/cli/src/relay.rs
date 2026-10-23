@@ -167,7 +167,7 @@ type SharedSessionKeys = Arc<Mutex<relaycat_crypto::SessionKeys>>;
 #[derive(Debug)]
 enum PtyEvent {
     Output(Vec<u8>),
-    Plain(PlainMsg),
+    Plain(Box<PlainMsg>),
     WorkspaceTransport(ShellTransportEvent),
     Exit(ExitStatus),
 }
@@ -188,7 +188,7 @@ fn input_handling_for_decision(decision: InputDecision) -> InputHandling {
 }
 
 async fn enqueue_reliable_plain_event(tx: &mpsc::Sender<PtyEvent>, msg: PlainMsg) -> bool {
-    tx.send(PtyEvent::Plain(msg)).await.is_ok()
+    tx.send(PtyEvent::Plain(Box::new(msg))).await.is_ok()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1571,7 +1571,7 @@ where
             }
             for event in workspace_service_for_events.drain_events() {
                 if workspace_event_tx
-                    .send(PtyEvent::Plain(PlainMsg::WorkspaceEvent(event)))
+                    .send(PtyEvent::Plain(Box::new(PlainMsg::WorkspaceEvent(event))))
                     .await
                     .is_err()
                 {
@@ -1901,29 +1901,29 @@ where
                         } else {
                             terminal_core.snapshot_messages(false)?
                         };
-                        if let Some(session_kind) = terminal_diagnostic_session_kind.as_deref() {
-                            if let Some(snapshot) = msgs.iter().find_map(|msg| match msg {
+                        if let Some(session_kind) = terminal_diagnostic_session_kind.as_deref()
+                            && let Some(snapshot) = msgs.iter().find_map(|msg| match msg {
                                 PlainMsg::TerminalSnapshotV2(snapshot) => Some(snapshot),
                                 _ => None,
-                            }) {
-                                let core = terminal_core.debug_snapshot();
-                                relaycat_log(
-                                    "INFO",
-                                    format!(
-                                        "terminal_snapshot_diag kind={session_kind} snapshot={} seq={} scrollback_window={} screen_rows={} core_history={} vt_scrollback={} frozen={} alt={} size={}x{}",
-                                        snapshot.snapshot_id,
-                                        snapshot.state_seq,
-                                        snapshot.scrollback_window.len(),
-                                        snapshot.screen_rows.len(),
-                                        core.history_len,
-                                        core.vt_scrollback_len,
-                                        core.history_frozen,
-                                        core.alt_screen,
-                                        core.cols,
-                                        core.rows,
-                                    ),
-                                );
-                            }
+                            })
+                        {
+                            let core = terminal_core.debug_snapshot();
+                            relaycat_log(
+                                "INFO",
+                                format!(
+                                    "terminal_snapshot_diag kind={session_kind} snapshot={} seq={} scrollback_window={} screen_rows={} core_history={} vt_scrollback={} frozen={} alt={} size={}x{}",
+                                    snapshot.snapshot_id,
+                                    snapshot.state_seq,
+                                    snapshot.scrollback_window.len(),
+                                    snapshot.screen_rows.len(),
+                                    core.history_len,
+                                    core.vt_scrollback_len,
+                                    core.history_frozen,
+                                    core.alt_screen,
+                                    core.cols,
+                                    core.rows,
+                                ),
+                            );
                         }
                         terminal_snapshot_request_coalescer_for_output.mark_request_finished();
                         msgs
@@ -2027,28 +2027,28 @@ where
                         master.resize(pty_size).context("failed to resize PTY")?;
                         drop(guard);
                         let resize_msgs = terminal_core.resize_messages(event, false)?;
-                        if let Some(session_kind) = terminal_diagnostic_session_kind.as_deref() {
-                            if let Some(snapshot) = resize_msgs.iter().find_map(|msg| match msg {
+                        if let Some(session_kind) = terminal_diagnostic_session_kind.as_deref()
+                            && let Some(snapshot) = resize_msgs.iter().find_map(|msg| match msg {
                                 PlainMsg::TerminalSnapshotV2(snapshot) => Some(snapshot),
                                 _ => None,
-                            }) {
-                                let core = terminal_core.debug_snapshot();
-                                relaycat_log(
-                                    "INFO",
-                                    format!(
-                                        "terminal_resize_snapshot_diag kind={session_kind} snapshot={} seq={} scrollback_window={} core_history={} vt_scrollback={} frozen={} alt={} size={}x{}",
-                                        snapshot.snapshot_id,
-                                        snapshot.state_seq,
-                                        snapshot.scrollback_window.len(),
-                                        core.history_len,
-                                        core.vt_scrollback_len,
-                                        core.history_frozen,
-                                        core.alt_screen,
-                                        core.cols,
-                                        core.rows,
-                                    ),
-                                );
-                            }
+                            })
+                        {
+                            let core = terminal_core.debug_snapshot();
+                            relaycat_log(
+                                "INFO",
+                                format!(
+                                    "terminal_resize_snapshot_diag kind={session_kind} snapshot={} seq={} scrollback_window={} core_history={} vt_scrollback={} frozen={} alt={} size={}x{}",
+                                    snapshot.snapshot_id,
+                                    snapshot.state_seq,
+                                    snapshot.scrollback_window.len(),
+                                    core.history_len,
+                                    core.vt_scrollback_len,
+                                    core.history_frozen,
+                                    core.alt_screen,
+                                    core.cols,
+                                    core.rows,
+                                ),
+                            );
                         }
                         msgs.extend(resize_msgs);
                         msgs
@@ -2122,7 +2122,7 @@ where
                     }
                 }
                 RelayOutputEvent::Output(event) => match event {
-                    PtyEvent::Plain(msg) => vec![msg],
+                    PtyEvent::Plain(msg) => vec![*msg],
                     PtyEvent::WorkspaceTransport(event) => {
                         match &event {
                             ShellTransportEvent::Started(descriptor) => {
@@ -2535,10 +2535,11 @@ where
                 }
             };
             let now_connected = app_connected_for_input.load(Ordering::Acquire);
-            if was_connected && !now_connected {
-                if let Ok(mut mode) = pty_work_mode_for_input.lock() {
-                    let _ = mode.observe_app_disconnected();
-                }
+            if was_connected
+                && !now_connected
+                && let Ok(mut mode) = pty_work_mode_for_input.lock()
+            {
+                let _ = mode.observe_app_disconnected();
             }
             // When a new app joins the relay room (PeerJoined increments the
             // generation counter in the decode handler), trigger AppConnected
@@ -2778,22 +2779,24 @@ where
                     // explicit ProtocolRejectV2 instead of a fallback ack.
                     match hello_ack_for(&hello) {
                         Ok(ack) => {
-                            let _ = heartbeat_output_tx_for_input
-                                .try_send(PtyEvent::Plain(PlainMsg::HelloAckV2(ack)));
+                            let _ = heartbeat_output_tx_for_input.try_send(PtyEvent::Plain(
+                                Box::new(PlainMsg::HelloAckV2(ack)),
+                            ));
                         }
                         Err(reject) => {
                             relaycat_log(
                                 "WARN",
                                 format!("protocol negotiation rejected: {}", reject.reason),
                             );
-                            let _ = heartbeat_output_tx_for_input
-                                .try_send(PtyEvent::Plain(PlainMsg::ProtocolRejectV2(reject)));
+                            let _ = heartbeat_output_tx_for_input.try_send(PtyEvent::Plain(
+                                Box::new(PlainMsg::ProtocolRejectV2(reject)),
+                            ));
                         }
                     }
                 }
                 Some(RelayInputAction::EchoHeartbeat) => {
                     let _ = heartbeat_output_tx_for_input
-                        .try_send(PtyEvent::Plain(PlainMsg::Heartbeat));
+                        .try_send(PtyEvent::Plain(Box::new(PlainMsg::Heartbeat)));
                 }
                 Some(RelayInputAction::Workspace(request)) => {
                     let service = workspace_service_for_input.clone();
@@ -2813,7 +2816,9 @@ where
                                 workspace_diagnostic_line(&operation, started.elapsed(), response_bytes, error),
                             );
                             let _ = output
-                                .send(PtyEvent::Plain(PlainMsg::WorkspaceResponse(response)))
+                                .send(PtyEvent::Plain(Box::new(PlainMsg::WorkspaceResponse(
+                                    response,
+                                ))))
                                 .await;
                         }
                     });

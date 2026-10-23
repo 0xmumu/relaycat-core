@@ -24,6 +24,9 @@ const EVENT_QUEUE_LIMIT: usize = 256;
 /// arrives must not grow the queue forever.
 const CANCEL_QUEUE_LIMIT: usize = 128;
 
+type CachedWorkspaceResponse = (Instant, std::result::Result<WorkspaceResponse, WorkspaceError>);
+type WorkspaceResponseCache = Arc<Mutex<HashMap<String, CachedWorkspaceResponse>>>;
+
 #[derive(Clone)]
 pub struct WorkspaceService {
     root: ProjectRoot,
@@ -32,7 +35,7 @@ pub struct WorkspaceService {
     shells: ShellManager,
     /// Advertised in `Capabilities`; must match what `ShellManager` enforces.
     shell_limit: u8,
-    cache: Arc<Mutex<HashMap<String, (Instant, std::result::Result<WorkspaceResponse, WorkspaceError>)>>>,
+    cache: WorkspaceResponseCache,
     cache_order: Arc<Mutex<VecDeque<String>>>,
     events: Arc<Mutex<VecDeque<WorkspaceEventEnvelope>>>,
     event_seq: Arc<Mutex<u64>>,
@@ -150,10 +153,10 @@ impl WorkspaceService {
             .idempotency_key
             .as_ref()
             .map(|key| idempotency_cache_key(&request.operation, key));
-        if let Some(key) = cache_key.as_deref() {
-            if let Some(result) = self.cached(key) {
-                return WorkspaceResponseEnvelope{request_id,project_id,result};
-            }
+        if let Some(key) = cache_key.as_deref()
+            && let Some(result) = self.cached(key)
+        {
+            return WorkspaceResponseEnvelope{request_id,project_id,result};
         }
         let (guard, cancel_flag) = self.begin_request(&request_id);
         // Registering and checking are separate steps: a Cancel that landed in
@@ -168,8 +171,10 @@ impl WorkspaceService {
         drop(guard);
         // Only successful results are cached: a transient failure must not pin
         // every retry that reuses the key to the same error for ten minutes.
-        if result.is_ok() {
-            if let Some(key) = cache_key { self.remember(key, result.clone()); }
+        if result.is_ok()
+            && let Some(key) = cache_key
+        {
+            self.remember(key, result.clone());
         }
         WorkspaceResponseEnvelope{request_id,project_id,result}
     }

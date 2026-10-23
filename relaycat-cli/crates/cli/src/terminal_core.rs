@@ -341,11 +341,9 @@ impl TerminalTranscriptStore {
         let mut entries_bytes = 0usize;
         let mut encoded_bytes = empty_chunk_bytes;
         for candidate_start in (minimum_start..end).rev() {
-            let candidate_entries_bytes = entries_bytes
-                .checked_add(terminal_transcript_entry_v2_encoded_len(
-                    &self.entries[candidate_start],
-                ))
-                .unwrap_or(usize::MAX);
+            let candidate_entries_bytes = entries_bytes.saturating_add(
+                terminal_transcript_entry_v2_encoded_len(&self.entries[candidate_start]),
+            );
             let candidate_entry_count = end.saturating_sub(candidate_start);
             let candidate_encoded_bytes = fixed_bytes
                 .checked_add(messagepack_array_header_encoded_len(candidate_entry_count))

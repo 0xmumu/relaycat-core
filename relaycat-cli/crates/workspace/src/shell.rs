@@ -10,7 +10,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{Receiver, SyncSender, TryRecvError, sync_channel},
+        mpsc::{Receiver, SyncSender, sync_channel},
     },
     thread,
 };
@@ -227,14 +227,11 @@ impl ShellManager {
                 events.push(ShellTransportEvent::Started(descriptor.clone()));
             }
             if let Ok(receiver) = shell.output_rx.lock() {
-                loop {
-                    match receiver.try_recv() {
-                        Ok(bytes) => events.push(ShellTransportEvent::Output {
-                            shell_id: descriptor.shell_id.clone(),
-                            bytes,
-                        }),
-                        Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-                    }
+                while let Ok(bytes) = receiver.try_recv() {
+                    events.push(ShellTransportEvent::Output {
+                        shell_id: descriptor.shell_id.clone(),
+                        bytes,
+                    });
                 }
             }
             if descriptor.exited && !shell.transport_exit_sent.swap(true, Ordering::AcqRel) {
