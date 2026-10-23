@@ -19,6 +19,15 @@ const PROTOCOL_VERSION: &[u8] = b"relaycat-v3";
 const CLI_TO_APP_NONCE_PREFIX: [u8; 4] = *b"RCCI";
 const APP_TO_CLI_NONCE_PREFIX: [u8; 4] = *b"RCIC";
 
+// HKDF info labels. The "v2" prefix is deliberate and must not be renamed:
+// these labels are part of the key schedule already deployed in every app
+// build. Changing them would derive different keys for the same handshake and
+// break pairing with every existing peer. Protocol versioning and domain
+// separation live in `PROTOCOL_VERSION` (mixed into the HKDF salt and the AEAD
+// AAD), not in these labels.
+const SESSION_KEY_INFO_CLI_TO_APP: &[u8] = b"relaycat-v2-session-key cli_to_app";
+const SESSION_KEY_INFO_APP_TO_CLI: &[u8] = b"relaycat-v2-session-key app_to_cli";
+
 type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -329,9 +338,9 @@ fn derive_session_keys(
 
     let mut cli_to_app = [0_u8; 32];
     let mut app_to_cli = [0_u8; 32];
-    hkdf.expand(b"relaycat-v2-session-key cli_to_app", &mut cli_to_app)
+    hkdf.expand(SESSION_KEY_INFO_CLI_TO_APP, &mut cli_to_app)
         .expect("32-byte HKDF output is valid");
-    hkdf.expand(b"relaycat-v2-session-key app_to_cli", &mut app_to_cli)
+    hkdf.expand(SESSION_KEY_INFO_APP_TO_CLI, &mut app_to_cli)
         .expect("32-byte HKDF output is valid");
 
     SessionKeys {
