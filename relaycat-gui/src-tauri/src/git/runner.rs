@@ -33,7 +33,7 @@ pub fn git_output_with_timeout(
     args: &[&str],
     timeout: Duration,
 ) -> Result<Output, String> {
-    let mut child = Command::new("git")
+    let mut command = Command::new("git")
         .args(args)
         .current_dir(project)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -48,9 +48,13 @@ pub fn git_output_with_timeout(
         .env("GIT_SEQUENCE_EDITOR", "true")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(git_spawn_error)?;
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn().map_err(git_spawn_error)?;
     let stdout = child.stdout.take().ok_or("git stdout unavailable")?;
     let stderr = child.stderr.take().ok_or("git stderr unavailable")?;
     let (stdout_tx, stdout_rx) = mpsc::channel::<Result<(Vec<u8>, bool), String>>();
@@ -67,7 +71,7 @@ pub fn git_output_with_timeout(
             break status;
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
+            kill_process_group(&mut child);
             let _ = child.wait();
             // Reader threads are detached on purpose: a grandchild that still
             // holds the pipe can keep them blocked, and the command must not
@@ -76,8 +80,20 @@ pub fn git_output_with_timeout(
         }
         thread::sleep(Duration::from_millis(20));
     };
-    let (stdout, stdout_truncated) = receive_bounded(&stdout_rx, GIT_OUTPUT_DRAIN_GRACE)??;
-    let (stderr, stderr_truncated) = receive_bounded(&stderr_rx, GIT_OUTPUT_DRAIN_GRACE)??;
+    let (stdout, stdout_truncated) = match receive_bounded(&stdout_rx, GIT_OUTPUT_DRAIN_GRACE) {
+        Ok(result) => result?,
+        Err(error) => {
+            kill_process_group(&mut child);
+            return Err(error);
+        }
+    };
+    let (stderr, stderr_truncated) = match receive_bounded(&stderr_rx, GIT_OUTPUT_DRAIN_GRACE) {
+        Ok(result) => result?,
+        Err(error) => {
+            kill_process_group(&mut child);
+            return Err(error);
+        }
+    };
     if stdout_truncated || stderr_truncated {
         return Err("git output exceeded limit".into());
     }
@@ -95,6 +111,22 @@ fn receive_bounded(
     receiver
         .recv_timeout(wait)
         .map_err(|_| "git output stream stalled".to_string())
+}
+
+#[cfg(unix)]
+fn kill_process_group(child: &mut std::process::Child) {
+    let pid = child.id();
+    if pid > 0 {
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(child: &mut std::process::Child) {
+    let _ = child.kill();
 }
 
 fn git_spawn_error(error: std::io::Error) -> String {
@@ -205,5 +237,63 @@ mod tests {
         let result = git_output(&repo, &["cat-file", "blob", &hash]);
         fs::remove_dir_all(&repo).unwrap();
         assert!(result.unwrap_err().contains("output exceeded"));
+    }
+
+    #[cfg(unix)]
+    fn temp_git_repo(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let repo = std::env::temp_dir().join(format!(
+            "relaycat-git-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&repo).unwrap();
+        let status = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        repo
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lingering_child_process_cannot_block_the_git_timeout() {
+        let repo = temp_git_repo("timeout");
+        let started = Instant::now();
+        let result = git_output_with_timeout(
+            &repo,
+            &["-c", "alias.linger=!sleep 30", "linger"],
+            Duration::from_millis(300),
+        );
+        let elapsed = started.elapsed();
+        fs::remove_dir_all(&repo).unwrap();
+        assert!(result.unwrap_err().contains("timed out"));
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "the process group should be killed promptly, took {elapsed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lingering_grandchild_is_killed_when_git_output_stalls() {
+        let repo = temp_git_repo("stalled");
+        let started = Instant::now();
+        let result = git_output_with_timeout(
+            &repo,
+            &["-c", "alias.linger=!sleep 30 &", "linger"],
+            Duration::from_secs(10),
+        );
+        let elapsed = started.elapsed();
+        fs::remove_dir_all(&repo).unwrap();
+        assert_eq!(result.unwrap_err(), "git output stream stalled");
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "the process group should be killed after the drain grace period, took {elapsed:?}"
+        );
     }
 }
