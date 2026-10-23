@@ -39,7 +39,7 @@ target/release/relaycat-relay \
 
 ```yaml
 limits:
-  max_concurrent_connections: 4096
+  max_concurrent_connections: 512
   max_connections_per_ip: 24
   inbound_messages_per_second: 120
   inbound_bytes_per_second: 2097152

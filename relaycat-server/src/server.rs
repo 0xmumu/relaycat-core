@@ -61,7 +61,7 @@ const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(10);
 // Keep the worst-case queued payload bounded (32 x 1 MiB frames per peer).
 pub const DEFAULT_OUTBOUND_CHANNEL_CAPACITY: usize = 32;
 /// Maximum number of simultaneous WebSocket connections across all rooms.
-pub const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 4096;
+pub const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 512;
 /// Maximum number of simultaneous WebSocket connections from one source IP.
 pub const DEFAULT_MAX_CONNECTIONS_PER_IP: usize = 24;
 /// How long to wait for the initial Join frame after the WebSocket is upgraded.
