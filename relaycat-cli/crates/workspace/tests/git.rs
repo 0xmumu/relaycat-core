@@ -105,3 +105,31 @@ fn history_rejects_option_like_or_invalid_references() {
     assert!(git.history("", "", "not-a-valid-ref", None, 10).is_err());
     assert!(git.history("", "", "HEAD", None, 10).is_ok());
 }
+
+#[test]
+fn discarding_a_large_untracked_directory_is_refused() {
+    let repo = Repo::new();
+    let dir = repo.root.join("scratch");
+    fs::create_dir_all(&dir).unwrap();
+    for index in 0..(200 + 5) {
+        fs::write(dir.join(format!("f{index}.txt")), "x").unwrap();
+    }
+    let git = GitService::new(ProjectRoot::open(&repo.root).unwrap());
+    let error = git.discard(&["scratch".to_string()]).unwrap_err();
+    assert_eq!(
+        error.code(),
+        relaycat_protocol::WorkspaceErrorCode::InvalidRequest
+    );
+    assert!(dir.exists(), "the tree must be left untouched");
+}
+
+#[test]
+fn discarding_a_small_untracked_directory_still_removes_it() {
+    let repo = Repo::new();
+    let dir = repo.root.join("scratch");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("a.txt"), "x").unwrap();
+    let git = GitService::new(ProjectRoot::open(&repo.root).unwrap());
+    git.discard(&["scratch".to_string()]).unwrap();
+    assert!(!dir.exists());
+}

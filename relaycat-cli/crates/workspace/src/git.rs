@@ -19,6 +19,32 @@ use std::{
 const GIT_ERROR_MESSAGE_LIMIT: usize = 4 * 1024;
 const MAX_GIT_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 const DEFAULT_GIT_TIMEOUT: Duration = Duration::from_secs(120);
+/// Largest untracked tree a single `discard` may remove recursively. The app
+/// asks the user to confirm per path, not per file, so an unbounded tree would
+/// let one tap delete an arbitrary amount of unreviewed work.
+const MAX_UNTRACKED_DISCARD_ENTRIES: usize = 200;
+
+/// Counts entries below `root`, stopping as soon as `limit` is exceeded.
+/// `file_type()` is used deliberately: it does not follow symlinks, so a link
+/// to a large directory elsewhere is counted as one entry and never walked.
+fn untracked_entry_count(root: &Path, limit: usize) -> Result<usize, WorkspaceServiceError> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut count = 0_usize;
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).map_err(WorkspaceServiceError::io)? {
+            let entry = entry.map_err(WorkspaceServiceError::io)?;
+            count += 1;
+            if count > limit {
+                return Ok(count);
+            }
+            let file_type = entry.file_type().map_err(WorkspaceServiceError::io)?;
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Ok(count)
+}
 
 #[derive(Clone)]
 pub struct GitService { root: ProjectRoot, mutation: Arc<Mutex<()>> }
@@ -176,7 +202,18 @@ impl GitService {
         for path in paths {
             if self.output(&["ls-files", "--error-unmatch", "--", path])?.status.success() {
                 self.run_success(&["restore", "--worktree", "--", path])?;
-            } else { let target=self.root.resolve(path)?; if target.is_dir(){fs::remove_dir_all(target).map_err(WorkspaceServiceError::io)?}else{fs::remove_file(target).map_err(WorkspaceServiceError::io)?} }
+            } else { let target=self.root.resolve(path)?; if target.is_dir(){
+                // A single "discard" on an untracked directory used to delete
+                // the whole tree without ever listing it. Refuse when the tree
+                // is large enough that the caller cannot have reviewed it.
+                let entries = untracked_entry_count(&target, MAX_UNTRACKED_DISCARD_ENTRIES)?;
+                if entries > MAX_UNTRACKED_DISCARD_ENTRIES {
+                    return Err(WorkspaceServiceError::invalid(format!(
+                        "refusing to discard untracked directory `{path}`: it contains more than {MAX_UNTRACKED_DISCARD_ENTRIES} entries; delete its files individually after reviewing the list"
+                    )));
+                }
+                fs::remove_dir_all(target).map_err(WorkspaceServiceError::io)?
+            }else{fs::remove_file(target).map_err(WorkspaceServiceError::io)?} }
         }
         self.mutation_result()
     }
