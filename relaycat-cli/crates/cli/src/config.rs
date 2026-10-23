@@ -93,13 +93,11 @@ impl Config {
 
     /// Persist the config to `path`, creating the parent directory if needed.
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
         let text =
             serde_json::to_string_pretty(self).context("failed to encode relaycat config")?;
-        fs::write(path, format!("{text}\n"))
+        // Atomic replace: a crash mid-write used to leave a truncated config
+        // and silently reset favorites/custom tools on the next start.
+        crate::private_fs::write_private_atomic(path, format!("{text}\n").as_bytes())
             .with_context(|| format!("failed to write {}", path.display()))
     }
 

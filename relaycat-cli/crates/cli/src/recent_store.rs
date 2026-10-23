@@ -129,7 +129,9 @@ impl RecentStore {
         let file = RecentFile::from_store(self);
         let text = serde_json::to_string_pretty(&file)
             .with_context(|| format!("failed to encode {}", path.display()))?;
-        fs::write(path, format!("{text}\n"))
+        // Atomic replace: losing the recent list to a crash mid-write is
+        // annoying rather than dangerous, but the fix is the same one line.
+        crate::private_fs::write_private_atomic(path, format!("{text}\n").as_bytes())
             .with_context(|| format!("failed to write {}", path.display()))
     }
 
