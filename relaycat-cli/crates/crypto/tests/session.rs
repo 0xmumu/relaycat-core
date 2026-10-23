@@ -1,5 +1,6 @@
 use relaycat_crypto::{
-    Direction, KeyPair, PairingRole, SessionKeys, decrypt, encrypt, nonce_for, pairing_token_proof,
+    Direction, KeyPair, PairingRole, SessionKeys, decrypt, encrypt, is_low_order_public_key, nonce_for,
+    pairing_token_proof,
     relay_admission,
 };
 
@@ -210,4 +211,16 @@ fn relay_admission_binds_token_and_room_without_device_key() {
     assert_eq!(admission, relay_admission(token, b"room-1"));
     assert_ne!(admission, relay_admission(token, b"room-2"));
     assert_ne!(admission, relay_admission(b"other-token", b"room-1"));
+}
+
+#[test]
+fn low_order_public_keys_are_recognised_and_real_keys_are_not() {
+    // The identity and the all-zero point both collapse X25519 to zero.
+    assert!(is_low_order_public_key(&[0_u8; 32]));
+    let mut one = [0_u8; 32];
+    one[0] = 1;
+    assert!(is_low_order_public_key(&one));
+
+    let key = KeyPair::generate();
+    assert!(!is_low_order_public_key(&key.public()));
 }

@@ -3,8 +3,8 @@ use std::sync::Mutex;
 
 use relaycat_crypto::{
     Direction as CryptoDirection, KeyPair, PairingRole, SessionKeys, decrypt, encrypt,
-    generate_connection_salt, nonce_for, pairing_token_hash, pairing_token_proof, relay_admission,
-    verify_pairing_token_proof,
+    generate_connection_salt, is_low_order_public_key, nonce_for, pairing_token_hash,
+    pairing_token_proof, relay_admission, verify_pairing_token_proof,
 };
 use relaycat_protocol::{
     AppJoinIntent, Direction, OuterFrame, PlainMsg, Role, decode_plain_msg, encode_frame, encode_plain_msg,
@@ -135,6 +135,11 @@ impl CliSecureHandshake {
             proof,
         ) {
             bail!("invalid pairing token proof");
+        }
+        // A token holder could otherwise pin a small-order key and force an
+        // all-zero shared secret; reject it before it reaches key derivation.
+        if is_low_order_public_key(device_pubkey) {
+            bail!("peer public key is not contributory (low-order point)");
         }
 
         if let Ok(mut guard) = self.app_peer.lock() {
@@ -281,6 +286,9 @@ impl AppSecureHandshake {
             proof,
         ) {
             bail!("invalid pairing token proof");
+        }
+        if is_low_order_public_key(device_pubkey) {
+            bail!("peer public key is not contributory (low-order point)");
         }
 
         Ok(Some(self.session_keys(cli_salt)?))
@@ -653,6 +661,32 @@ mod tests {
         assert!(
             result.is_err(),
             "a poisoned salt lock must fail the handshake, never fall back to an all-zero salt"
+        );
+    }
+
+    #[test]
+    fn a_low_order_peer_key_is_rejected_even_with_a_valid_proof() {
+        let token = vec![9_u8; 16];
+        let handshake = CliSecureHandshake::new("room", KeyPair::generate(), token.clone());
+        let salt = [3_u8; 32];
+        let low_order = [0_u8; 32];
+        let proof = pairing_token_proof(
+            &token,
+            b"room",
+            PairingRole::App,
+            &low_order,
+            &salt,
+        );
+        let frame = OuterFrame::PeerJoined {
+            role: Role::App,
+            device_pubkey: low_order,
+            pairing_token_proof: Some(proof),
+            connection_salt: Some(salt),
+        };
+        let error = handshake.accept_peer_joined(&frame).unwrap_err();
+        assert!(
+            error.to_string().contains("not contributory"),
+            "unexpected error: {error}"
         );
     }
 }

@@ -258,6 +258,22 @@ pub fn verify_pairing_token_proof(
     constant_time_eq(&expected, proof)
 }
 
+/// Returns true when `public` is a low-order X25519 point (the all-zero key,
+/// the small-order points, …). Diffie-Hellman against such a point yields an
+/// all-zero shared secret, which would make the derived session keys
+/// predictable regardless of the private key. Handshakes reject these peers.
+///
+/// A clamped scalar always lands in the prime-order subgroup, so probing with
+/// one fixed scalar is enough to detect every small-order point.
+pub fn is_low_order_public_key(public: &[u8; 32]) -> bool {
+    const PROBE_SCALAR: [u8; 32] = [0x42_u8; 32];
+    MontgomeryPoint(*public)
+        .mul_clamped(PROBE_SCALAR)
+        .to_bytes()
+        .iter()
+        .all(|byte| *byte == 0)
+}
+
 pub fn pairing_token_hash(pairing_token: &[u8]) -> [u8; 32] {
     use sha2::Digest;
 
