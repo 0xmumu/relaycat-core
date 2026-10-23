@@ -109,9 +109,32 @@ pub(crate) fn open_without_following_symlinks(
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW);
     }
-    options
-        .open(path)
-        .map_err(WorkspaceServiceError::io)
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Open the reparse point itself instead of following it: the Windows
+        // counterpart of `O_NOFOLLOW`.
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path).map_err(WorkspaceServiceError::io)?;
+    #[cfg(windows)]
+    {
+        // With `FILE_FLAG_OPEN_REPARSE_POINT` the handle refers to the link,
+        // so a symlink swapped in after the canonicalize pass is detectable
+        // instead of silently followed. Junctions report `is_dir()` and are
+        // rejected by the caller's regular-file check.
+        let is_reparse_point = file
+            .metadata()
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_reparse_point {
+            return Err(WorkspaceServiceError::invalid(
+                "path points at a reparse point",
+            ));
+        }
+    }
+    Ok(file)
 }
 
 #[cfg(test)]
