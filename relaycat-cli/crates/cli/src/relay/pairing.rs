@@ -390,6 +390,59 @@ pub async fn prepare_secure_pairing(
     })
 }
 
+/// Maximum number of unverifiable frames logged while waiting for the app;
+/// beyond it they are dropped silently so a hostile relay cannot flood the log.
+const MAX_LOGGED_IGNORED_FRAMES: u32 = 5;
+
+/// What the pairing loop should do with one inbound frame.
+#[derive(Debug)]
+enum PairingFrameOutcome {
+    /// Not a usable `PeerJoined` (malformed frame, wrong role, bad proof, or a
+    /// `PeerJoined` we could not verify). Waiting must continue: a single bad
+    /// frame — from the relay or from another room member — must never end a
+    /// pairing that is still waiting for the real app.
+    Ignore(Option<String>),
+    /// The app completed the handshake.
+    Established(relaycat_crypto::SessionKeys),
+    /// The relay rejected the room; waiting is pointless.
+    Fatal(String),
+}
+
+fn evaluate_pairing_frame(
+    handshake: &CliSecureHandshake,
+    bytes: &[u8],
+) -> PairingFrameOutcome {
+    let frame = match decode_frame(bytes) {
+        Ok(frame) => frame,
+        Err(error) => {
+            return PairingFrameOutcome::Ignore(Some(format!("malformed relay frame: {error:#}")));
+        }
+    };
+    if let OuterFrame::Error { message, code } = &frame {
+        return PairingFrameOutcome::Fatal(relay_error_description(message, *code));
+    }
+    log_received_peer_joined(&frame);
+    match handshake.accept_peer_joined(&frame) {
+        Ok(Some(keys)) => PairingFrameOutcome::Established(keys),
+        Ok(None) => PairingFrameOutcome::Ignore(None),
+        Err(error) => PairingFrameOutcome::Ignore(Some(format!(
+            "unverified peer_joined ignored: {error:#}"
+        ))),
+    }
+}
+
+fn log_ignored_pairing_frame(ignored_frames: &mut u32, reason: Option<String>) {
+    *ignored_frames = (*ignored_frames).saturating_add(1);
+    if let Some(reason) = reason
+        && *ignored_frames <= MAX_LOGGED_IGNORED_FRAMES
+    {
+        relaycat_log(
+            "WARN",
+            format!("ignoring unusable frame while waiting for app: {reason}"),
+        );
+    }
+}
+
 /// Block until the mobile app joins the relay room, then hand off to the secure
 /// PTY relay loop.
 pub async fn run_secure_pairing_prepared(prepared: PreparedSecurePairing) -> Result<()> {
@@ -402,6 +455,7 @@ pub async fn run_secure_pairing_prepared(prepared: PreparedSecurePairing) -> Res
         mut ws_reader,
     } = prepared;
 
+    let mut ignored_frames = 0u32;
     loop {
         let message = tokio::select! {
             message = ws_reader.next() => message,
@@ -425,24 +479,25 @@ pub async fn run_secure_pairing_prepared(prepared: PreparedSecurePairing) -> Res
         let Message::Binary(bytes) = message else {
             continue;
         };
-        let frame = decode_frame(&bytes).context("failed to decode relay frame")?;
-        if let OuterFrame::Error { message, code } = &frame {
-            anyhow::bail!("{}", relay_error_description(message, *code));
-        }
-        log_received_peer_joined(&frame);
-        if let Some(keys) = handshake.accept_peer_joined(&frame)? {
-            report_secure_session_established();
-            crate::recent_store::remember_recent_target_or_warn(&target);
-            return run_secure_pty_relay(
-                target,
-                material.room_id.clone(),
-                keys,
-                handshake,
-                reconnect,
-                ws_writer,
-                ws_reader,
-            )
-            .await;
+        match evaluate_pairing_frame(&handshake, &bytes) {
+            PairingFrameOutcome::Ignore(reason) => {
+                log_ignored_pairing_frame(&mut ignored_frames, reason);
+            }
+            PairingFrameOutcome::Fatal(message) => anyhow::bail!("{message}"),
+            PairingFrameOutcome::Established(keys) => {
+                report_secure_session_established();
+                crate::recent_store::remember_recent_target_or_warn(&target);
+                return run_secure_pty_relay(
+                    target,
+                    material.room_id.clone(),
+                    keys,
+                    handshake,
+                    reconnect,
+                    ws_writer,
+                    ws_reader,
+                )
+                .await;
+            }
         }
     }
 }
@@ -460,6 +515,7 @@ pub(crate) async fn run_secure_pairing_prepared_with_launcher_controls(
     } = prepared;
     let control_mode = PairingControlModeGuard::new();
 
+    let mut ignored_frames = 0u32;
     loop {
         let message = tokio::select! {
             message = ws_reader.next() => message,
@@ -492,36 +548,29 @@ pub(crate) async fn run_secure_pairing_prepared_with_launcher_controls(
         let Message::Binary(bytes) = message else {
             continue;
         };
-        let frame = match decode_frame(&bytes).context("failed to decode relay frame") {
-            Ok(frame) => frame,
-            Err(err) => return Ok(PairingRunOutcome::PairingFailed(err)),
-        };
-        if let OuterFrame::Error { message, code } = &frame {
-            return Ok(PairingRunOutcome::PairingFailed(anyhow::anyhow!(
-                "{}",
-                relay_error_description(message, *code)
-            )));
-        }
-        log_received_peer_joined(&frame);
-        let keys = match handshake.accept_peer_joined(&frame) {
-            Ok(keys) => keys,
-            Err(err) => return Ok(PairingRunOutcome::PairingFailed(err)),
-        };
-        if let Some(keys) = keys {
-            report_secure_session_established();
-            crate::recent_store::remember_recent_target_or_warn(&target);
-            drop(control_mode);
-            run_secure_pty_relay(
-                target,
-                material.room_id.clone(),
-                keys,
-                handshake,
-                reconnect,
-                ws_writer,
-                ws_reader,
-            )
-            .await?;
-            return Ok(PairingRunOutcome::Completed);
+        match evaluate_pairing_frame(&handshake, &bytes) {
+            PairingFrameOutcome::Ignore(reason) => {
+                log_ignored_pairing_frame(&mut ignored_frames, reason);
+            }
+            PairingFrameOutcome::Fatal(message) => {
+                return Ok(PairingRunOutcome::PairingFailed(anyhow::anyhow!(message)));
+            }
+            PairingFrameOutcome::Established(keys) => {
+                report_secure_session_established();
+                crate::recent_store::remember_recent_target_or_warn(&target);
+                drop(control_mode);
+                run_secure_pty_relay(
+                    target,
+                    material.room_id.clone(),
+                    keys,
+                    handshake,
+                    reconnect,
+                    ws_writer,
+                    ws_reader,
+                )
+                .await?;
+                return Ok(PairingRunOutcome::Completed);
+            }
         }
     }
 }
@@ -697,5 +746,101 @@ impl PairingControlModeGuard {
 impl Drop for PairingControlModeGuard {
     fn drop(&mut self) {
         disable_local_focus_reporting();
+    }
+}
+
+
+#[cfg(test)]
+mod pairing_frame_tests {
+    use super::*;
+    use relaycat_crypto::{KeyPair, PairingRole, pairing_token_proof};
+
+    const ROOM: &str = "room-under-test";
+
+    fn token() -> Vec<u8> {
+        vec![9_u8; 16]
+    }
+
+    fn handshake() -> CliSecureHandshake {
+        CliSecureHandshake::new(ROOM, KeyPair::from_private_bytes([7_u8; 32]), token())
+    }
+
+    fn peer_joined_bytes(
+        app_public: [u8; 32],
+        salt: Option<[u8; 32]>,
+        proof: [u8; 32],
+    ) -> Vec<u8> {
+        encode_frame(&OuterFrame::PeerJoined {
+            role: Role::App,
+            device_pubkey: app_public,
+            pairing_token_proof: Some(proof),
+            connection_salt: salt,
+        })
+        .expect("encode peer_joined")
+    }
+
+    #[test]
+    fn malformed_frames_are_ignored_while_waiting() {
+        let outcome = evaluate_pairing_frame(&handshake(), b"definitely not a relay frame");
+        assert!(matches!(outcome, PairingFrameOutcome::Ignore(Some(_))));
+    }
+
+    #[test]
+    fn an_unverifiable_peer_joined_is_ignored() {
+        let app = KeyPair::from_private_bytes([1_u8; 32]);
+        let bytes = peer_joined_bytes(app.public(), Some([3_u8; 32]), [0_u8; 32]);
+        assert!(matches!(
+            evaluate_pairing_frame(&handshake(), &bytes),
+            PairingFrameOutcome::Ignore(Some(_))
+        ));
+    }
+
+    #[test]
+    fn a_missing_connection_salt_is_ignored_not_fatal() {
+        let app = KeyPair::from_private_bytes([1_u8; 32]);
+        let salt = [3_u8; 32];
+        let proof = pairing_token_proof(
+            &token(),
+            ROOM.as_bytes(),
+            PairingRole::App,
+            &app.public(),
+            &salt,
+        );
+        let bytes = peer_joined_bytes(app.public(), None, proof);
+        assert!(matches!(
+            evaluate_pairing_frame(&handshake(), &bytes),
+            PairingFrameOutcome::Ignore(Some(_))
+        ));
+    }
+
+    #[test]
+    fn a_verified_peer_joined_establishes_the_session() {
+        let app = KeyPair::from_private_bytes([1_u8; 32]);
+        let salt = [3_u8; 32];
+        let proof = pairing_token_proof(
+            &token(),
+            ROOM.as_bytes(),
+            PairingRole::App,
+            &app.public(),
+            &salt,
+        );
+        let bytes = peer_joined_bytes(app.public(), Some(salt), proof);
+        assert!(matches!(
+            evaluate_pairing_frame(&handshake(), &bytes),
+            PairingFrameOutcome::Established(_)
+        ));
+    }
+
+    #[test]
+    fn a_relay_error_still_ends_the_wait() {
+        let bytes = encode_frame(&OuterFrame::Error {
+            message: "room is full".into(),
+            code: None,
+        })
+        .expect("encode error");
+        assert!(matches!(
+            evaluate_pairing_frame(&handshake(), &bytes),
+            PairingFrameOutcome::Fatal(_)
+        ));
     }
 }
