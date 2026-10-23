@@ -1,6 +1,7 @@
 use std::{
     fs,
     io::{self, Write},
+    fmt,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -16,7 +17,7 @@ pub const RELAYCAT_DIR: &str = ".relaycat";
 pub const PAIRING_SESSION_TTL_SECS: u64 = 24 * 60 * 60;
 pub const PAIRING_QR_DIR: &str = "pairing";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct StoredPairingSession {
     pub version: u8,
     pub created_at_unix: u64,
@@ -26,6 +27,21 @@ pub struct StoredPairingSession {
     pub cli_private_key: [u8; 32],
     pub cli_public_key: [u8; 32],
     pub pairing_token: Vec<u8>,
+}
+
+impl fmt::Debug for StoredPairingSession {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoredPairingSession")
+            .field("version", &self.version)
+            .field("created_at_unix", &self.created_at_unix)
+            .field("relay_url", &self.relay_url)
+            .field("room_id", &self.room_id)
+            .field("session_kind", &self.session_kind)
+            .field("cli_private_key", &"<redacted>")
+            .field("cli_public_key", &self.cli_public_key)
+            .field("pairing_token", &"<redacted>")
+            .finish()
+    }
 }
 
 impl StoredPairingSession {
@@ -327,4 +343,27 @@ pub fn current_unix_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod debug_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_stored_key_and_token() {
+        let token = vec![0xab; 16];
+        let session = StoredPairingSession::new(
+            PairingMaterial {
+                relay_url: "wss://example.test".into(),
+                room_id: "room".into(),
+                cli_public_key: [0xcd; 32],
+                pairing_token: token.clone(),
+                session_kind: SessionKind::shell(),
+            },
+            [0xef; 32],
+        );
+        let debug = format!("{session:?}");
+        assert!(!debug.contains(&URL_SAFE_NO_PAD.encode(&token)));
+        assert!(debug.contains("<redacted>"));
+    }
 }

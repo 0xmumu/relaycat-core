@@ -7,6 +7,7 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use rand_core::{OsRng, RngCore};
 use sha2::Sha256;
+use std::fmt;
 use thiserror::Error;
 
 // v3 binds the per-connection salt into both the pairing-token proof and the
@@ -77,10 +78,18 @@ pub enum CryptoError {
     Decrypt,
 }
 
-#[derive(Debug)]
 pub struct KeyPair {
     private: [u8; 32],
     public: [u8; 32],
+}
+
+impl fmt::Debug for KeyPair {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyPair")
+            .field("private", &"<redacted>")
+            .field("public", &self.public)
+            .finish()
+    }
 }
 
 impl KeyPair {
@@ -104,10 +113,19 @@ impl KeyPair {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SessionKeys {
     cli_to_app: [u8; 32],
     app_to_cli: [u8; 32],
+}
+
+impl fmt::Debug for SessionKeys {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SessionKeys")
+            .field("cli_to_app", &"<redacted>")
+            .field("app_to_cli", &"<redacted>")
+            .finish()
+    }
 }
 
 impl SessionKeys {
@@ -400,4 +418,28 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         diff |= a ^ b;
     }
     diff == 0
+}
+
+#[cfg(test)]
+mod debug_redaction_tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_key_and_session_bytes() {
+        let private = [0xab; 32];
+        let key = KeyPair::from_private_bytes(private);
+        let key_debug = format!("{key:?}");
+        let private_hex = private.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        assert!(!key_debug.contains(&private_hex));
+        assert!(key_debug.contains("<redacted>"));
+
+        let keys = SessionKeys {
+            cli_to_app: [0xcd; 32],
+            app_to_cli: [0xef; 32],
+        };
+        let keys_debug = format!("{keys:?}");
+        assert!(!keys_debug.contains("cdcdcd"));
+        assert!(!keys_debug.contains("efefef"));
+        assert!(keys_debug.contains("<redacted>"));
+    }
 }
