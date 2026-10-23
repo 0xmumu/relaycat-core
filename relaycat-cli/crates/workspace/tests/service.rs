@@ -251,3 +251,38 @@ fn git_remote_progress_reports_bounded_fetch_pull_and_push_summaries() {
     assert_eq!(push_messages.len(),1,"{push_messages:?}");
     assert!(push_messages[0].contains("[Push]")&&push_messages[0].contains("1 commit")&&push_messages[0].contains(&head)&&push_messages[0].ends_with("OK"),"{push_messages:?}");
 }
+
+#[test]
+fn a_cancelled_request_is_skipped_and_the_cancellation_is_one_shot() {
+    let repo = Repo::new();
+    let root = ProjectRoot::open(&repo.root).unwrap();
+    let project_id = root.project_id().to_string();
+    let service = WorkspaceService::new(root, 1);
+
+    let cancel = service.execute(WorkspaceRequestEnvelope {
+        request_id: "cancel-1".into(),
+        project_id: project_id.clone(),
+        deadline_unix_ms: u64::MAX,
+        idempotency_key: None,
+        operation: WorkspaceRequest::Cancel {
+            target_request_id: "queued".into(),
+        },
+    });
+    assert!(matches!(cancel.result.unwrap(), WorkspaceResponse::Ack));
+
+    let envelope = WorkspaceRequestEnvelope {
+        request_id: "queued".into(),
+        project_id,
+        deadline_unix_ms: u64::MAX,
+        idempotency_key: None,
+        operation: WorkspaceRequest::Capabilities,
+    };
+    let cancelled = service.execute(envelope.clone());
+    assert_eq!(
+        cancelled.result.unwrap_err().code,
+        relaycat_protocol::WorkspaceErrorCode::Cancelled
+    );
+
+    // Cancellation applies to the next attempt only; a retry runs normally.
+    assert!(service.execute(envelope).result.is_ok());
+}

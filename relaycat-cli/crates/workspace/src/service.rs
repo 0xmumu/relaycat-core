@@ -16,6 +16,9 @@ const IDEMPOTENCY_LIMIT: usize = 256;
 /// Upper bound on queued workspace events (mostly git progress). Without it a
 /// disconnected app lets the queue grow for the life of the session.
 const EVENT_QUEUE_LIMIT: usize = 256;
+/// Upper bound on pending cancellations. Cancelling a request id that never
+/// arrives must not grow the queue forever.
+const CANCEL_QUEUE_LIMIT: usize = 128;
 
 #[derive(Clone)]
 pub struct WorkspaceService {
@@ -29,6 +32,10 @@ pub struct WorkspaceService {
     cache_order: Arc<Mutex<VecDeque<String>>>,
     events: Arc<Mutex<VecDeque<WorkspaceEventEnvelope>>>,
     event_seq: Arc<Mutex<u64>>,
+    /// Request ids the app asked to cancel before they started running.
+    /// `execute` consumes them at entry; in-flight git commands are not
+    /// interrupted (they finish and their result is still delivered).
+    cancelled: Arc<Mutex<VecDeque<String>>>,
 }
 
 impl WorkspaceService {
@@ -43,6 +50,7 @@ impl WorkspaceService {
             shells: ShellManager::new(root.clone(), shell_limit), shell_limit, root,
             cache: Arc::new(Mutex::new(HashMap::new())), cache_order: Arc::new(Mutex::new(VecDeque::new())),
             events: Arc::new(Mutex::new(VecDeque::new())), event_seq: Arc::new(Mutex::new(0)),
+            cancelled: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -89,6 +97,10 @@ impl WorkspaceService {
         if request.project_id != project_id {
             return WorkspaceResponseEnvelope{request_id,project_id,result:Err(WorkspaceServiceError::outside_project().into())};
         }
+        // A Cancel that arrived before this request started: skip the work.
+        if self.take_cancelled(&request_id) {
+            return WorkspaceResponseEnvelope{request_id,project_id,result:Err(WorkspaceServiceError::cancelled().into())};
+        }
         if request.deadline_unix_ms < unix_ms() {
             return WorkspaceResponseEnvelope{request_id,project_id,result:Err(WorkspaceServiceError::timeout().into())};
         }
@@ -109,7 +121,7 @@ impl WorkspaceService {
     fn dispatch(&self, operation:WorkspaceRequest)->std::result::Result<WorkspaceResponse,WorkspaceError>{
         let result:Result<WorkspaceResponse,WorkspaceServiceError>=match operation {
             WorkspaceRequest::Capabilities=>Ok(WorkspaceResponse::Capabilities(WorkspaceCapabilities{files:true,git_read:true,git_write:true,shell:true,directory_page_size:WORKSPACE_DIRECTORY_PAGE_SIZE,directory_entry_limit:WORKSPACE_DIRECTORY_ENTRY_LIMIT,git_history_page_size:WORKSPACE_GIT_HISTORY_PAGE_SIZE,text_preview_limit:TEXT_PREVIEW_LIMIT as u32,image_preview_limit:IMAGE_PREVIEW_LIMIT as u32,shell_limit:self.shell_limit})),
-            WorkspaceRequest::Cancel{..}=>Ok(WorkspaceResponse::Ack),
+            WorkspaceRequest::Cancel{target_request_id}=>{self.remember_cancelled(&target_request_id);Ok(WorkspaceResponse::Ack)},
             WorkspaceRequest::ListDirectory{path,offset,limit}=>self.files.list(&path,offset,limit).map(WorkspaceResponse::Directory),
             WorkspaceRequest::SearchFiles{query,limit}=>self.files.search(&query,limit).map(WorkspaceResponse::FileSearch),
             WorkspaceRequest::ReadFile{path,max_bytes,image_variant}=>self.files.read(&path,max_bytes,image_variant).map(WorkspaceResponse::File),
@@ -156,6 +168,29 @@ impl WorkspaceService {
     }
 
     fn cached(&self,key:&str)->Option<std::result::Result<WorkspaceResponse,WorkspaceError>>{let now=Instant::now();let mut cache=self.cache.lock().ok()?;cache.retain(|_,(created,_)|now.duration_since(*created)<IDEMPOTENCY_TTL);cache.get(key).map(|(_,result)|result.clone())}
+    fn take_cancelled(&self, request_id: &str) -> bool {
+        let Ok(mut cancelled) = self.cancelled.lock() else {
+            return false;
+        };
+        match cancelled.iter().position(|queued| queued == request_id) {
+            Some(index) => {
+                cancelled.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
+    fn remember_cancelled(&self, request_id: &str) {
+        let Ok(mut cancelled) = self.cancelled.lock() else {
+            return;
+        };
+        if !cancelled.iter().any(|queued| queued == request_id) {
+            cancelled.push_back(request_id.to_string());
+            while cancelled.len() > CANCEL_QUEUE_LIMIT {
+                cancelled.pop_front();
+            }
+        }
+    }
     fn remember(&self,key:String,result:std::result::Result<WorkspaceResponse,WorkspaceError>){if let(Ok(mut cache),Ok(mut order))=(self.cache.lock(),self.cache_order.lock()){if !cache.contains_key(&key){order.push_back(key.clone());}cache.insert(key,(Instant::now(),result));while order.len()>IDEMPOTENCY_LIMIT{if let Some(old)=order.pop_front(){cache.remove(&old);}}}}
     fn push_event(&self,event:WorkspaceEvent){if let Ok(mut seq)=self.event_seq.lock(){*seq=seq.saturating_add(1);if let Ok(mut events)=self.events.lock(){enqueue_event(&mut events,WorkspaceEventEnvelope{project_id:self.root.project_id().into(),event_seq:*seq,event});}}}
 }
