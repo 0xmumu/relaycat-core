@@ -105,11 +105,23 @@ impl WorkspaceService {
         if request.deadline_unix_ms < unix_ms() {
             return WorkspaceResponseEnvelope{request_id,project_id,result:Err(WorkspaceServiceError::timeout().into())};
         }
-        if let Some(key)=request.idempotency_key.as_ref() {
-            if let Some(result)=self.cached(key) { return WorkspaceResponseEnvelope{request_id,project_id,result}; }
+        // The cache key includes the operation: reusing one idempotency key
+        // for a different operation must not return the earlier result.
+        let cache_key = request
+            .idempotency_key
+            .as_ref()
+            .map(|key| idempotency_cache_key(&request.operation, key));
+        if let Some(key) = cache_key.as_deref() {
+            if let Some(result) = self.cached(key) {
+                return WorkspaceResponseEnvelope{request_id,project_id,result};
+            }
         }
         let result=self.dispatch(request.operation);
-        if let Some(key)=request.idempotency_key { self.remember(key,result.clone()); }
+        // Only successful results are cached: a transient failure must not pin
+        // every retry that reuses the key to the same error for ten minutes.
+        if result.is_ok() {
+            if let Some(key) = cache_key { self.remember(key, result.clone()); }
+        }
         WorkspaceResponseEnvelope{request_id,project_id,result}
     }
 
@@ -194,6 +206,47 @@ impl WorkspaceService {
     }
     fn remember(&self,key:String,result:std::result::Result<WorkspaceResponse,WorkspaceError>){if let(Ok(mut cache),Ok(mut order))=(self.cache.lock(),self.cache_order.lock()){if !cache.contains_key(&key){order.push_back(key.clone());}cache.insert(key,(Instant::now(),result));while order.len()>IDEMPOTENCY_LIMIT{if let Some(old)=order.pop_front(){cache.remove(&old);}}}}
     fn push_event(&self,event:WorkspaceEvent){if let Ok(mut seq)=self.event_seq.lock(){*seq=seq.saturating_add(1);if let Ok(mut events)=self.events.lock(){enqueue_event(&mut events,WorkspaceEventEnvelope{project_id:self.root.project_id().into(),event_seq:*seq,event});}}}
+}
+
+/// Stable per-operation tag used in the idempotency cache key.
+fn operation_tag(operation: &WorkspaceRequest) -> &'static str {
+    match operation {
+        WorkspaceRequest::Capabilities => "capabilities",
+        WorkspaceRequest::Cancel { .. } => "cancel",
+        WorkspaceRequest::ListDirectory { .. } => "list_directory",
+        WorkspaceRequest::SearchFiles { .. } => "search_files",
+        WorkspaceRequest::ReadFile { .. } => "read_file",
+        WorkspaceRequest::GitSummary => "git_summary",
+        WorkspaceRequest::GitStatus => "git_status",
+        WorkspaceRequest::GitDiff { .. } => "git_diff",
+        WorkspaceRequest::GitHistory { .. } => "git_history",
+        WorkspaceRequest::GitCommitDetail { .. } => "git_commit_detail",
+        WorkspaceRequest::GitListRefs => "git_list_refs",
+        WorkspaceRequest::GitStage { .. } => "git_stage",
+        WorkspaceRequest::GitUnstage { .. } => "git_unstage",
+        WorkspaceRequest::GitDiscard { .. } => "git_discard",
+        WorkspaceRequest::GitApplyPatch { .. } => "git_apply_patch",
+        WorkspaceRequest::GitCheckout { .. } => "git_checkout",
+        WorkspaceRequest::GitCreateBranch { .. } => "git_create_branch",
+        WorkspaceRequest::GitRenameBranch { .. } => "git_rename_branch",
+        WorkspaceRequest::GitDeleteBranch { .. } => "git_delete_branch",
+        WorkspaceRequest::GitCreateTag { .. } => "git_create_tag",
+        WorkspaceRequest::GitCommit { .. } => "git_commit",
+        WorkspaceRequest::GitRemote { .. } => "git_remote",
+        WorkspaceRequest::GitCommitAction { .. } => "git_commit_action",
+        WorkspaceRequest::GitReset { .. } => "git_reset",
+        WorkspaceRequest::ShellList => "shell_list",
+        WorkspaceRequest::ShellCreate { .. } => "shell_create",
+        WorkspaceRequest::ShellInput { .. } => "shell_input",
+        WorkspaceRequest::ShellResize { .. } => "shell_resize",
+        WorkspaceRequest::ShellSnapshot { .. } => "shell_snapshot",
+        WorkspaceRequest::ShellClose { .. } => "shell_close",
+        WorkspaceRequest::ShellCloseAll => "shell_close_all",
+    }
+}
+
+fn idempotency_cache_key(operation: &WorkspaceRequest, key: &str) -> String {
+    format!("{}:{key}", operation_tag(operation))
 }
 
 /// Appends an event, dropping the oldest once the queue is full. Events are

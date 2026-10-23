@@ -286,3 +286,52 @@ fn a_cancelled_request_is_skipped_and_the_cancellation_is_one_shot() {
     // Cancellation applies to the next attempt only; a retry runs normally.
     assert!(service.execute(envelope).result.is_ok());
 }
+
+#[test]
+fn one_idempotency_key_does_not_leak_results_across_operations() {
+    let repo = Repo::new();
+    let root = ProjectRoot::open(&repo.root).unwrap();
+    let project_id = root.project_id().to_string();
+    let service = WorkspaceService::new(root, 1);
+    let envelope = |operation| WorkspaceRequestEnvelope {
+        request_id: "shared".into(),
+        project_id: project_id.clone(),
+        deadline_unix_ms: u64::MAX,
+        idempotency_key: Some("same-key".into()),
+        operation,
+    };
+
+    let capabilities = service.execute(envelope(WorkspaceRequest::Capabilities));
+    assert!(matches!(
+        capabilities.result.unwrap(),
+        WorkspaceResponse::Capabilities(_)
+    ));
+
+    // Same key, different operation: must run instead of replaying the cache.
+    let status = service.execute(envelope(WorkspaceRequest::GitStatus));
+    assert!(matches!(status.result.unwrap(), WorkspaceResponse::GitStatus(_)));
+}
+
+#[test]
+fn a_failed_request_is_not_cached_under_its_idempotency_key() {
+    let repo = Repo::new();
+    let root = ProjectRoot::open(&repo.root).unwrap();
+    let project_id = root.project_id().to_string();
+    let service = WorkspaceService::new(root, 1);
+    let envelope = || WorkspaceRequestEnvelope {
+        request_id: "read".into(),
+        project_id: project_id.clone(),
+        deadline_unix_ms: u64::MAX,
+        idempotency_key: Some("idem-read".into()),
+        operation: WorkspaceRequest::ReadFile {
+            path: "late.txt".into(),
+            max_bytes: 1024,
+            image_variant: relaycat_protocol::ImageVariant::Original,
+        },
+    };
+
+    assert!(service.execute(envelope()).result.is_err());
+    fs::write(repo.root.join("late.txt"), "hello").unwrap();
+    // If the failure had been cached, this would keep returning the error.
+    assert!(service.execute(envelope()).result.is_ok());
+}
