@@ -192,7 +192,7 @@ impl GitService {
     pub fn rename_branch(&self,name:&str)->Result<GitMutationResult,WorkspaceServiceError>{self.validate_branch(name)?;self.simple_mutation(&["branch","-m",name])}
     pub fn delete_branch(&self,name:&str,force:bool)->Result<GitMutationResult,WorkspaceServiceError>{self.validate_branch(name)?;self.simple_mutation(&["branch",if force{"-D"}else{"-d"},name])}
     pub fn create_tag(&self,name:&str,target:&str)->Result<GitMutationResult,WorkspaceServiceError>{if name.is_empty()||target.is_empty()||name.starts_with('-')||target.starts_with('-'){return Err(WorkspaceServiceError::invalid("invalid tag"));}self.simple_mutation(&["tag",name,target])}
-    pub fn commit(&self,message:&str,amend:bool)->Result<GitMutationResult,WorkspaceServiceError>{if message.trim().is_empty()||message.len()>1024*1024{return Err(WorkspaceServiceError::invalid("invalid commit message"));}let nonce=SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();let path=std::env::temp_dir().join(format!("relaycat-workspace-commit-{nonce}.txt"));fs::write(&path,message).map_err(WorkspaceServiceError::io)?;let p=path.to_string_lossy().into_owned();let result=if amend{self.simple_mutation(&["commit","-F",&p,"--amend"])}else{self.simple_mutation(&["commit","-F",&p])};let _=fs::remove_file(path);result}
+    pub fn commit(&self,message:&str,amend:bool)->Result<GitMutationResult,WorkspaceServiceError>{if message.trim().is_empty()||message.len()>1024*1024{return Err(WorkspaceServiceError::invalid("invalid commit message"));}let path=write_commit_message_file(message)?;let p=path.to_string_lossy().into_owned();let result=if amend{self.simple_mutation(&["commit","-F",&p,"--amend"])}else{self.simple_mutation(&["commit","-F",&p])};let _=fs::remove_file(path);result}
     pub fn remote(&self,kind:GitRemoteOperation)->Result<GitMutationResult,WorkspaceServiceError>{self.remote_with_summary(kind).map(|outcome|outcome.mutation)}
     pub(crate) fn remote_with_summary(&self,kind:GitRemoteOperation)->Result<GitRemoteOutcome,WorkspaceServiceError>{
         let args:&[&str]=match kind{GitRemoteOperation::Fetch=>&["fetch","--progress","--prune"],GitRemoteOperation::Pull=>&["pull","--progress","--ff-only"],GitRemoteOperation::Push=>&["push","--progress"]};
@@ -261,6 +261,48 @@ impl GitService {
 }
 
 fn status_name(code:char)->String{match code{'A'=>"added",'D'=>"deleted",'R'=>"renamed",'C'=>"copied",'U'=>"conflict",_=>"modified"}.into()}
+
+/// Temp files for commit messages. A sequence keeps two commits in the same
+/// nanosecond (or two processes with the same pid on different runs) from
+/// colliding, and `create_new` refuses to follow a planted symlink.
+static COMMIT_MESSAGE_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+fn write_commit_message_file(message: &str) -> Result<PathBuf, WorkspaceServiceError> {
+    for _ in 0..8 {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let sequence = COMMIT_MESSAGE_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "relaycat-workspace-commit-{}-{nonce}-{sequence}.txt",
+            std::process::id()
+        ));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // Commit messages can quote code or credentials; keep them
+            // readable by their owner only.
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(mut file) => {
+                file.write_all(message.as_bytes())
+                    .map_err(WorkspaceServiceError::io)?;
+                file.flush().map_err(WorkspaceServiceError::io)?;
+                return Ok(path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(WorkspaceServiceError::io(error)),
+        }
+    }
+    Err(WorkspaceServiceError::invalid(
+        "could not create a temporary commit message file",
+    ))
+}
 fn map_git_command_error(error: std::io::Error) -> WorkspaceServiceError {
     if error.kind() == std::io::ErrorKind::NotFound {
         WorkspaceServiceError::new(
@@ -605,6 +647,22 @@ mod tests {
             "true",
             "stdout must survive the reader rework"
         );
+    }
+
+    #[test]
+    fn commit_message_temp_files_are_owner_only() {
+        let path = write_commit_message_file("subject\n\nbody").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "subject\n\nbody");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "commit messages must not be world readable"
+            );
+        }
+        let _ = fs::remove_file(&path);
     }
 
     #[test]
