@@ -536,39 +536,48 @@ fn sha256_file_hex(path: &Path) -> Result<String> {
 
 fn replace_current_exe(downloaded: &Path) -> Result<()> {
     let current = env::current_exe().context("failed to locate current executable")?;
-    let backup = current.with_extension("old");
+    let staging = staging_path_for(&current);
+    let _ = fs::remove_file(&staging);
 
+    // Stage the bytes next to the destination (same filesystem) and swap them
+    // in with a single rename. The old flow renamed the binary away first and
+    // then copied the new one into place: a crash in between left no
+    // `relaycat` at all, and the copy itself was not atomic.
+    fs::copy(downloaded, &staging)
+        .with_context(|| format!("failed to stage {}", staging.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(downloaded)
-            .with_context(|| format!("failed to stat {}", downloaded.display()))?
+        let mut permissions = fs::metadata(&staging)
+            .with_context(|| format!("failed to stat {}", staging.display()))?
             .permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(downloaded, permissions)
-            .with_context(|| format!("failed to make {} executable", downloaded.display()))?;
+        fs::set_permissions(&staging, permissions)
+            .with_context(|| format!("failed to make {} executable", staging.display()))?;
     }
+    // Durability: make sure the staged bytes are on disk before the rename
+    // publishes them.
+    fs::File::open(&staging)
+        .and_then(|file| file.sync_all())
+        .with_context(|| format!("failed to sync {}", staging.display()))?;
 
-    let _ = fs::remove_file(&backup);
-    fs::rename(&current, &backup).with_context(|| {
-        format!(
-            "failed to move {} to {}",
-            current.display(),
-            backup.display()
-        )
-    })?;
-    if let Err(err) = fs::copy(downloaded, &current) {
-        let _ = fs::rename(&backup, &current);
-        return Err(err).with_context(|| format!("failed to replace {}", current.display()));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(&current)?.permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&current, permissions)?;
+    if let Err(error) = fs::rename(&staging, &current) {
+        let _ = fs::remove_file(&staging);
+        return Err(error)
+            .with_context(|| format!("failed to replace {}", current.display()));
     }
     Ok(())
+}
+
+/// `relaycat-0.1.5` → `relaycat-0.1.5.new`.
+///
+/// Deliberately not `Path::with_extension`: it would treat the trailing
+/// version component as the extension and stage `relaycat-0.1.new`, i.e. a
+/// different file.
+fn staging_path_for(current: &Path) -> PathBuf {
+    let mut staged = current.as_os_str().to_os_string();
+    staged.push(".new");
+    PathBuf::from(staged)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -724,5 +733,17 @@ mod tests {
         assert!(!manifest_is_official(
             "https://www.relaycat.cn.evil.example/update/cli.json"
         ));
+    }
+
+    #[test]
+    fn the_staging_path_keeps_versioned_binary_names_intact() {
+        assert_eq!(
+            staging_path_for(Path::new("/usr/local/bin/relaycat-0.1.5")),
+            PathBuf::from("/usr/local/bin/relaycat-0.1.5.new")
+        );
+        assert_eq!(
+            staging_path_for(Path::new("/usr/local/bin/relaycat")),
+            PathBuf::from("/usr/local/bin/relaycat.new")
+        );
     }
 }
