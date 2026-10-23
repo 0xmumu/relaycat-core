@@ -792,6 +792,12 @@ mod tests {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         init.status().unwrap();
+        assert!(git(&path, &["config", "user.name", "Test"])
+            .status
+            .success());
+        assert!(git(&path, &["config", "user.email", "test@example.com"])
+            .status
+            .success());
         path
     }
 
