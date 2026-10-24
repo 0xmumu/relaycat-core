@@ -284,9 +284,25 @@ pub(crate) fn store_pairing_material_for_run(
     material: &crate::pairing::PairingMaterial,
     cli_private_key: [u8; 32],
 ) -> Result<()> {
+    store_pairing_material_for_run_at(
+        project_dir,
+        session_path,
+        material,
+        cli_private_key,
+        crate::pairing_store::current_unix_timestamp(),
+    )
+}
+
+pub(crate) fn store_pairing_material_for_run_at(
+    project_dir: &Path,
+    session_path: &Path,
+    material: &crate::pairing::PairingMaterial,
+    cli_private_key: [u8; 32],
+    created_at_unix: u64,
+) -> Result<()> {
     save_session(
         session_path,
-        &StoredPairingSession::new(material.clone(), cli_private_key),
+        &StoredPairingSession::new_at(material.clone(), cli_private_key, created_at_unix),
     )?;
     let _ = ensure_gitignore(project_dir);
     Ok(())
@@ -335,15 +351,21 @@ pub async fn prepare_secure_pairing(
     }
     let (cli_keypair, material) =
         generate_pairing_material_for_run_attempt(&relay.url, &target.session_kind);
+    let created_at_unix = crate::pairing_store::current_unix_timestamp();
     let cli_private_key = *cli_keypair.private();
     let session_path = session_file_path(&project_dir, &target.session_kind);
     let ws_url = build_ws_url(&relay.url, &material.room_id, "cli");
 
-    let handshake = Arc::new(CliSecureHandshake::new(
-        material.room_id.clone(),
-        cli_keypair,
-        material.pairing_token.clone(),
-    ));
+    let handshake = Arc::new(
+        CliSecureHandshake::new(
+            material.room_id.clone(),
+            cli_keypair,
+            material.pairing_token.clone(),
+        )
+        .with_admission_deadline(
+            created_at_unix.saturating_add(crate::pairing_store::PAIRING_SESSION_TTL_SECS),
+        ),
+    );
     let reconnect = Arc::new(RelayTransportReconnect::Secure {
         ws_url,
         handshake: handshake.clone(),
@@ -356,7 +378,13 @@ pub async fn prepare_secure_pairing(
     }
     .with_context(|| initial_relay_unavailable_message(&target))?;
 
-    store_pairing_material_for_run(&project_dir, &session_path, &material, cli_private_key)?;
+    store_pairing_material_for_run_at(
+        &project_dir,
+        &session_path,
+        &material,
+        cli_private_key,
+        created_at_unix,
+    )?;
 
     relaycat_log("INFO", "secure pairing URL:");
     let pairing_url = crate::pairing::pairing_url(&material);
