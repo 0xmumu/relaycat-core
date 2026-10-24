@@ -1,8 +1,10 @@
 # RelayCat GUI
 
-RelayCat GUI 是 RelayCat 的开源桌面客户端，当前对外发布版本为 **0.1.9**。它使用 Tauri 2、Vite、TypeScript 和 xterm.js，将本地 AI Coding Agent、项目文件、Git 工作流和手机远程控制整合在一个桌面界面中。
+RelayCat GUI 是 RelayCat 的开源桌面客户端，当前对外发布版本为 **0.2.0**。它使用 Tauri 2、Vite、TypeScript 和 xterm.js，将本地 AI Coding Agent、项目文件、Git 工作流和手机远程控制整合在一个桌面界面中。
 
 GUI 不会把项目上传到云端执行。Claude Code、Codex、OpenCode、Gemini CLI、Shell 和自定义工具仍在本机 PTY 中运行；手机通过 RelayCat 的端到端加密会话查看和控制终端。
+
+本版变更见 [v0.2.0 Release 说明](../docs/releases/relaycat-gui-v0.2.0.md) 和 [更新日志](../CHANGELOG.md)。
 
 ## 功能特性
 
@@ -108,7 +110,7 @@ npm test
 cargo test --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-正式版本通过仓库中的 GitHub Actions 独立发布，tag 格式为 `relaycat-gui-v<version>`。桌面安装包可在 [GitHub Releases](https://github.com/JackyZhang8/relaycat-core/releases) 或 [RelayCat 下载站](https://cdn.relaycat.cn/) 获取。
+正式版本使用独立 tag，格式为 `relaycat-gui-v<version>`。发布工作流目前保存在 `_github/workflows/release-gui.yml`，已暂停 GitHub Actions 自动执行。桌面安装包可在 [GitHub Releases](https://github.com/JackyZhang8/relaycat-core/releases) 或 [RelayCat 下载站](https://cdn.relaycat.cn/) 获取。
 
 ## 项目结构
 

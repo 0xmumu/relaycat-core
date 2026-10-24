@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
-const workflowPath = new URL("../../.github/workflows/release-gui.yml", import.meta.url);
+const activeWorkflowPath = new URL("../../.github/workflows/release-gui.yml", import.meta.url);
+const workflowPath = existsSync(activeWorkflowPath)
+  ? activeWorkflowPath
+  : new URL("../../_github/workflows/release-gui.yml", import.meta.url);
 const macUpdaterScriptPath = new URL("../scripts/prepare-macos-updater.sh", import.meta.url);
 
 test("the GUI release rebuilds the macOS updater before collecting artifacts", () => {

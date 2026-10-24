@@ -1,8 +1,10 @@
 # RelayCat CLI
 
-RelayCat CLI 是 RelayCat 的电脑端命令行入口，当前版本为 **0.1.5**，二进制名为 `relaycat`。它在本机启动 Claude Code、Codex、OpenCode、Gemini CLI、Shell 或自定义命令，管理 PTY 终端，并通过 Relay 将终端会话端到端加密地连接到 RelayCat App。
+RelayCat CLI 是 RelayCat 的电脑端命令行入口，当前版本为 **0.1.6**，二进制名为 `relaycat`。它在本机启动 Claude Code、Codex、OpenCode、Gemini CLI、Shell 或自定义命令，管理 PTY 终端，并通过 Relay 将终端会话端到端加密地连接到 RelayCat App。
 
 代码、凭据、项目目录和 Agent 进程始终留在本机；Relay 只转发握手信息和密文。
+
+本版变更见 [v0.1.6 Release 说明](../docs/releases/relaycat-cli-v0.1.6.md) 和 [更新日志](../CHANGELOG.md)。
 
 ## 功能特性
 
@@ -81,7 +83,7 @@ relaycat <command> --help
 cargo build --release -p relaycat-cli
 ```
 
-产物位于 `target/release/relaycat`。Windows 交叉编译可参考 [build-win.sh](build-win.sh)，桌面快捷方式和安装脚本见 [packaging/README.md](packaging/README.md)。
+产物位于 `target/release/relaycat`。Windows 发布构建配置见 [CLI 发布工作流](../_github/workflows/release-cli.yml)，桌面快捷方式和安装脚本见 [packaging/README.md](packaging/README.md)。
 
 运行检查：
 
