@@ -33,6 +33,8 @@ pub struct LimitsConfig {
     pub outbound_channel_capacity: usize,
     /// Maximum size of a single binary frame, in bytes.
     pub max_binary_frame_bytes: usize,
+    /// Aggregate payload bytes that may be queued across all connections.
+    pub max_queued_bytes: usize,
 }
 
 impl Default for LimitsConfig {
@@ -44,6 +46,7 @@ impl Default for LimitsConfig {
             inbound_bytes_per_second: crate::server::DEFAULT_INBOUND_BYTES_PER_SECOND,
             outbound_channel_capacity: crate::server::DEFAULT_OUTBOUND_CHANNEL_CAPACITY,
             max_binary_frame_bytes: crate::server::MAX_BINARY_FRAME_BYTES,
+            max_queued_bytes: crate::server::DEFAULT_MAX_QUEUED_BYTES,
         }
     }
 }
@@ -174,6 +177,10 @@ xfyun:
             config.limits.max_binary_frame_bytes,
             crate::server::MAX_BINARY_FRAME_BYTES
         );
+        assert_eq!(
+            config.limits.max_queued_bytes,
+            256 * 1024 * 1024
+        );
     }
 
     #[test]
@@ -201,6 +208,13 @@ limits:
             config.limits.inbound_messages_per_second,
             crate::server::DEFAULT_INBOUND_MESSAGES_PER_SECOND
         );
+    }
+
+    #[test]
+    fn queued_byte_budget_can_be_overridden() {
+        let config: RelayConfig =
+            serde_yaml::from_str("limits:\n  max_queued_bytes: 67108864\n").expect("parse yaml");
+        assert_eq!(config.limits.max_queued_bytes, 64 * 1024 * 1024);
     }
 
     #[test]

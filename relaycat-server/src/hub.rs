@@ -1,4 +1,5 @@
 use std::{
+    sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
@@ -10,10 +11,51 @@ use tokio::sync::mpsc;
 
 use crate::room::{ConnId, RoomError};
 
-pub type OutboundTx = mpsc::Sender<OuterFrame>;
-pub type OutboundRx = mpsc::Receiver<OuterFrame>;
+pub type OutboundTx = mpsc::Sender<QueuedFrame>;
+pub type OutboundRx = mpsc::Receiver<QueuedFrame>;
 pub type CloseSignalTx = mpsc::Sender<CloseSignal>;
 pub type CloseSignalRx = mpsc::Receiver<CloseSignal>;
+
+#[derive(Debug)]
+pub struct QueuedFrame {
+    pub frame: OuterFrame,
+    _charge: Option<QueuedBytesCharge>,
+}
+
+#[derive(Debug)]
+struct QueuedBytesCharge {
+    bytes: usize,
+    counter: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Drop for QueuedBytesCharge {
+    fn drop(&mut self) {
+        self.counter
+            .fetch_sub(self.bytes, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+impl QueuedFrame {
+    pub fn control(frame: OuterFrame) -> Self {
+        Self {
+            frame,
+            _charge: None,
+        }
+    }
+
+    fn charged(frame: OuterFrame, charge: QueuedBytesCharge) -> Self {
+        Self {
+            frame,
+            _charge: Some(charge),
+        }
+    }
+}
+
+impl PartialEq<OuterFrame> for QueuedFrame {
+    fn eq(&self, other: &OuterFrame) -> bool {
+        self.frame == *other
+    }
+}
 
 /// Out-of-band eviction notice delivered on a dedicated channel so the
 /// websocket task can send a proper Close frame with a reason even when the
@@ -120,10 +162,18 @@ pub enum AdmissionCheck {
     RoomUnprotected,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Hub {
     rooms: DashMap<String, HubRoom>,
     metrics: HubMetrics,
+    max_queued_bytes: usize,
+    queued_bytes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Default for Hub {
+    fn default() -> Self {
+        Self::new(crate::server::DEFAULT_MAX_QUEUED_BYTES)
+    }
 }
 
 /// Slow-consumer observability counters, accumulated for the lifetime of the
@@ -133,6 +183,7 @@ struct HubMetrics {
     slow_consumer_evictions_total: AtomicU64,
     slow_consumer_evictions_cli: AtomicU64,
     slow_consumer_evictions_app: AtomicU64,
+    global_queue_budget_evictions_total: AtomicU64,
     slow_consumer_discarded_bytes: AtomicU64,
     outbound_queue_high_water: AtomicU64,
 }
@@ -149,11 +200,46 @@ pub struct HubStats {
     pub slow_consumer_evictions_total: u64,
     pub slow_consumer_evictions_cli: u64,
     pub slow_consumer_evictions_app: u64,
+    pub global_queue_budget_evictions_total: u64,
     pub slow_consumer_discarded_bytes: u64,
     pub outbound_queue_high_water: u64,
+    pub queued_bytes: usize,
 }
 
 impl Hub {
+    pub fn new(max_queued_bytes: usize) -> Self {
+        Self {
+            rooms: DashMap::new(),
+            metrics: HubMetrics::default(),
+            max_queued_bytes: max_queued_bytes.max(crate::server::MAX_BINARY_FRAME_BYTES),
+            queued_bytes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    fn reserve_queue_bytes(&self, bytes: usize) -> Option<QueuedBytesCharge> {
+        let mut current = self.queued_bytes.load(Ordering::Relaxed);
+        loop {
+            let next = current.checked_add(bytes)?;
+            if next > self.max_queued_bytes {
+                return None;
+            }
+            match self.queued_bytes.compare_exchange_weak(
+                current,
+                next,
+                std::sync::atomic::Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Some(QueuedBytesCharge {
+                        bytes,
+                        counter: Arc::clone(&self.queued_bytes),
+                    });
+                }
+                Err(actual) => current = actual,
+            }
+        }
+    }
+
     /// Returns `Ok(true)` when an existing App peer was evicted to make room
     /// for the new connection, `Ok(false)` otherwise.
     pub fn join(&self, request: JoinRequest) -> Result<bool, HubError> {
@@ -215,7 +301,9 @@ impl Hub {
                     // displaced, so a failed notice only leaves it to time out.
                     if let Err(err) = old_cli
                         .outbound
-                        .try_send(OuterFrame::PeerLeft { role: Role::Cli })
+                        .try_send(QueuedFrame::control(OuterFrame::PeerLeft {
+                            role: Role::Cli,
+                        }))
                     {
                         log_control_send_failure(&request.room_id, "PeerLeft", "old cli", &err);
                     }
@@ -241,7 +329,10 @@ impl Hub {
                         // below; app disconnects are intentionally invisible to
                         // CLI so it can remain idle. The old transport is already
                         // displaced, so a failed notice only leaves it to time out.
-                        if let Err(err) = old_app.outbound.try_send(OuterFrame::Evicted) {
+                        if let Err(err) = old_app
+                            .outbound
+                            .try_send(QueuedFrame::control(OuterFrame::Evicted))
+                        {
                             log_control_send_failure(&request.room_id, "Evicted", "old app", &err);
                         }
                         // Out-of-band close so the displaced transport terminates
@@ -262,12 +353,12 @@ impl Hub {
             // PeerJoined desyncs per-connection salts / key epochs, so a peer
             // whose queue cannot accept it is evicted instead of silently left
             // stale; its websocket task terminates and it reconnects cleanly.
-            if let Err(err) = peer.outbound.try_send(OuterFrame::PeerJoined {
+            if let Err(err) = peer.outbound.try_send(QueuedFrame::control(OuterFrame::PeerJoined {
                 role: request.role,
                 device_pubkey: request.device_pubkey,
                 pairing_token_proof: request.pairing_token_proof,
                 connection_salt: request.connection_salt,
-            }) {
+            })) {
                 log_control_send_failure(&request.room_id, "PeerJoined", "present peer", &err);
                 self.record_slow_consumer_eviction(
                     &request.room_id,
@@ -280,7 +371,9 @@ impl Hub {
                 if let Some(newcomer) = room.peer_for(peer_role) {
                     let _ = newcomer
                         .outbound
-                        .try_send(OuterFrame::PeerLeft { role: peer_role });
+                        .try_send(QueuedFrame::control(OuterFrame::PeerLeft {
+                            role: peer_role,
+                        }));
                 }
                 return Ok(app_evicted);
             }
@@ -289,18 +382,20 @@ impl Hub {
             // per-connection salt to derive matching session keys; without this
             // the second joiner would never see the first joiner's salt and the
             // two ends would derive different keys.
-            if let Err(err) = request.outbound.try_send(OuterFrame::PeerJoined {
+            if let Err(err) = request.outbound.try_send(QueuedFrame::control(OuterFrame::PeerJoined {
                 role: peer_role,
                 device_pubkey: peer.device_pubkey,
                 pairing_token_proof: peer.pairing_token_proof,
                 connection_salt: peer.connection_salt,
-            }) {
+            })) {
                 log_control_send_failure(&request.room_id, "PeerJoined", "newcomer", &err);
                 room.leave_active(request.role, request.conn_id);
                 if let Some(survivor) = room.peer_for(request.role) {
                     let _ = survivor
                         .outbound
-                        .try_send(OuterFrame::PeerLeft { role: request.role });
+                        .try_send(QueuedFrame::control(OuterFrame::PeerLeft {
+                            role: request.role,
+                        }));
                 }
                 return Err(HubError::JoinNotificationFailed);
             }
@@ -338,15 +433,34 @@ impl Hub {
                     .outbound_queue_high_water
                     .fetch_max(queue_used, Ordering::Relaxed);
                 let close_signal = peer.close_signal.clone();
-                let failed_send = peer.outbound.try_send(frame).err().map(|err| {
-                    let reason = control_send_reason(&err);
-                    let frame_bytes = match &err {
-                        mpsc::error::TrySendError::Full(frame)
-                        | mpsc::error::TrySendError::Closed(frame) => frame_payload_bytes(frame),
-                    };
-                    (peer.conn_id, reason, frame_bytes)
-                });
+                let frame_bytes = frame_payload_bytes(&frame);
+                let failed_send = if frame_bytes == 0 {
+                    peer.outbound
+                        .try_send(QueuedFrame::control(frame))
+                        .err()
+                        .map(|err| (peer.conn_id, control_send_reason(&err), 0))
+                } else if let Some(charge) = self.reserve_queue_bytes(frame_bytes) {
+                    peer.outbound
+                        .try_send(QueuedFrame::charged(frame, charge))
+                        .err()
+                        .map(|err| {
+                            let queued_bytes = match &err {
+                                mpsc::error::TrySendError::Full(queued)
+                                | mpsc::error::TrySendError::Closed(queued) => {
+                                    frame_payload_bytes(&queued.frame)
+                                }
+                            };
+                            (peer.conn_id, control_send_reason(&err), queued_bytes)
+                        })
+                } else {
+                    Some((peer.conn_id, "global_queue_budget", frame_bytes))
+                };
                 if let Some((to_conn_id, reason, frame_bytes)) = failed_send {
+                    if reason == "global_queue_budget" {
+                        self.metrics
+                            .global_queue_budget_evictions_total
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
                     self.record_slow_consumer_eviction(room_id, to_role, frame_bytes, reason);
                     if let Some(close_signal) = close_signal {
                         let _ = close_signal.try_send(CloseSignal::SlowConsumer);
@@ -362,7 +476,9 @@ impl Hub {
                     if let Some(survivor) = room.peer_for(to_role) {
                         let _ = survivor
                             .outbound
-                            .try_send(OuterFrame::PeerLeft { role: to_role });
+                            .try_send(QueuedFrame::control(OuterFrame::PeerLeft {
+                                role: to_role,
+                            }));
                     }
                     eprintln!(
                         "WARN relaycat: relay forward evicted peer room={room_id} from={from_role:?} to={to_role:?} reason={reason} discarded_frame_bytes={frame_bytes} queue_high_water={}",
@@ -402,7 +518,10 @@ impl Hub {
                     // A lost PeerLeft leaves the app waiting on a dead CLI; a
                     // peer whose queue cannot accept it is evicted so its
                     // websocket task terminates and it reconnects cleanly.
-                    if let Err(err) = peer.outbound.try_send(OuterFrame::PeerLeft { role }) {
+                    if let Err(err) = peer
+                        .outbound
+                        .try_send(QueuedFrame::control(OuterFrame::PeerLeft { role }))
+                    {
                         log_control_send_failure(room_id, "PeerLeft", "surviving peer", &err);
                         let survivor_role = match role {
                             Role::Cli => Role::App,
@@ -479,6 +598,10 @@ impl Hub {
                 .metrics
                 .slow_consumer_evictions_app
                 .load(Ordering::Relaxed),
+            global_queue_budget_evictions_total: self
+                .metrics
+                .global_queue_budget_evictions_total
+                .load(Ordering::Relaxed),
             slow_consumer_discarded_bytes: self
                 .metrics
                 .slow_consumer_discarded_bytes
@@ -487,6 +610,7 @@ impl Hub {
                 .metrics
                 .outbound_queue_high_water
                 .load(Ordering::Relaxed),
+            queued_bytes: self.queued_bytes.load(Ordering::Relaxed),
             ..HubStats::default()
         };
 
@@ -631,10 +755,12 @@ impl HubRoom {
 
     fn notify_all(&self, frame: OuterFrame) {
         if let Some(peer) = &self.cli {
-            let _ = peer.outbound.try_send(frame.clone());
+            let _ = peer
+                .outbound
+                .try_send(QueuedFrame::control(frame.clone()));
         }
         if let Some(peer) = &self.app {
-            let _ = peer.outbound.try_send(frame);
+            let _ = peer.outbound.try_send(QueuedFrame::control(frame));
         }
     }
 }
@@ -655,7 +781,7 @@ fn signal_close(peer: &Peer, signal: CloseSignal) {
     }
 }
 
-fn control_send_reason(err: &mpsc::error::TrySendError<OuterFrame>) -> &'static str {
+fn control_send_reason(err: &mpsc::error::TrySendError<QueuedFrame>) -> &'static str {
     match err {
         mpsc::error::TrySendError::Full(_) => "channel full",
         mpsc::error::TrySendError::Closed(_) => "channel closed",
@@ -673,7 +799,7 @@ fn log_control_send_failure(
     room_id: &str,
     frame: &str,
     target: &str,
-    err: &mpsc::error::TrySendError<OuterFrame>,
+    err: &mpsc::error::TrySendError<QueuedFrame>,
 ) {
     let reason = control_send_reason(err);
     eprintln!(
