@@ -29,6 +29,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check CLI update signing public key
+        shell: bash
+        env:
+          PUBLIC_KEY: ${{ vars.RELAYCAT_CLI_UPDATE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PUBLIC_KEY" ]; then
+            echo "::error::Set the RELAYCAT_CLI_UPDATE_PUBLIC_KEY repository variable; see relaycat-cli/README.md, CLI update signing."
+            exit 1
+          fi
+
       - name: Resolve version
         id: version
         shell: bash
@@ -163,6 +174,8 @@ jobs:
 
       - name: Build CLI
         shell: bash
+        env:
+          RELAYCAT_CLI_UPDATE_PUBLIC_KEY: ${{ vars.RELAYCAT_CLI_UPDATE_PUBLIC_KEY }}
         run: |
           cargo build --release --locked --target "${{ matrix.target }}" \
             --manifest-path relaycat-cli/Cargo.toml \
@@ -299,8 +312,26 @@ jobs:
 
       - name: Generate checksums and cli.json
         shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.RELAYCAT_CLI_UPDATE_SIGNING_KEY }}
+          PUBLIC_KEY: ${{ vars.RELAYCAT_CLI_UPDATE_PUBLIC_KEY }}
         run: |
           set -euo pipefail
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::error::Set the RELAYCAT_CLI_UPDATE_SIGNING_KEY repository secret; see relaycat-cli/README.md, CLI update signing."
+            exit 1
+          fi
+          key="$RUNNER_TEMP/update-signing-key.pem"
+          message="$RUNNER_TEMP/update-signing-message"
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          trap 'rm -f "$key" "$message"' EXIT
+          derived_public_key="$(openssl pkey -in "$key" -pubout -outform DER | tail -c 32 | base64 -w0)"
+          if [ "$derived_public_key" != "$PUBLIC_KEY" ]; then
+            echo "::error::RELAYCAT_CLI_UPDATE_SIGNING_KEY does not match RELAYCAT_CLI_UPDATE_PUBLIC_KEY."
+            exit 1
+          fi
+
           version="${{ needs.validate.outputs.version }}"
           tag="${{ needs.validate.outputs.tag }}"
           base="https://github.com/${{ github.repository }}/releases/download/${tag}"
@@ -327,13 +358,17 @@ jobs:
               echo "::warning::missing CLI artifact for $target ($file)"
               continue
             fi
+            sha_value="$(sha "dist/$file")"
+            printf 'relaycat-cli-update-v1\n%s\n%s\n%s\n' "$version" "$target" "$sha_value" > "$message"
+            sig="$(openssl pkeyutl -sign -inkey "$key" -rawin -in "$message" | base64 -w0)"
             downloads="$(jq \
               --arg t "$target" \
               --arg u "${base}/${file}" \
-              --arg s "$(sha "dist/$file")" \
+              --arg s "$sha_value" \
+              --arg sig "$sig" \
               --argjson b "$(fsize "dist/$file")" \
               --arg k "$kind" \
-              '. += [{target: $t, url: $u, sha256: $s, kind: $k, size_bytes: $b}]' \
+              '. += [{target: $t, url: $u, sha256: $s, kind: $k, size_bytes: $b, signature: $sig}]' \
               <<<"$downloads")"
           done
 

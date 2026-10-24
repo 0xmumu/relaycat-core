@@ -66,9 +66,9 @@ pub struct CliUpdateDownload {
     pub kind: String,
     #[serde(default)]
     pub size_bytes: Option<u64>,
-    /// Base64 Ed25519 signature over the raw 32-byte `sha256` digest. Required
-    /// once [`CLI_UPDATE_PUBLIC_KEY`] is provisioned: SHA-256 alone proves
-    /// nothing, because the expected digest comes from the same manifest.
+    /// Base64 Ed25519 signature over the canonical release record binding
+    /// `latest_version`, `target`, and `sha256`. Required once
+    /// [`CLI_UPDATE_PUBLIC_KEY`] is provisioned.
     #[serde(default)]
     pub signature: Option<String>,
 }
@@ -240,7 +240,7 @@ fn run_update_command_blocking(
     );
     // Check the publisher's signature before spending bandwidth on the
     // download; it pins the digest the payload is verified against below.
-    verify_download_signature(download)?;
+    verify_download_signature(&manifest.latest_version, download)?;
     download_url_to_path(&download.url, &output)?;
     verify_sha256(&output, &download.sha256)?;
     verify_download_size(&output, download.size_bytes)?;
@@ -442,18 +442,23 @@ fn verify_sha256(path: &Path, expected_hex: &str) -> Result<()> {
     Ok(())
 }
 
-/// Verifies `downloads[].signature` against the pinned key.
-///
-/// The signature covers the raw 32-byte SHA-256 digest, which is what pins the
-/// bytes: a forged manifest cannot re-sign a different binary without the
-/// release key, so the digest check and the signature check reinforce each
-/// other instead of both coming from the same untrusted document.
-fn verify_download_signature(download: &CliUpdateDownload) -> Result<()> {
-    verify_download_signature_with_key(CLI_UPDATE_PUBLIC_KEY, download)
+pub(crate) fn update_signature_message(version: &str, target: &str, sha256_hex: &str) -> Vec<u8> {
+    format!(
+        "relaycat-cli-update-v1\n{version}\n{target}\n{}\n",
+        sha256_hex.to_ascii_lowercase()
+    )
+    .into_bytes()
+}
+
+/// Verifies `downloads[].signature` against the pinned key and canonical
+/// release metadata.
+fn verify_download_signature(version: &str, download: &CliUpdateDownload) -> Result<()> {
+    verify_download_signature_with_key(CLI_UPDATE_PUBLIC_KEY, version, download)
 }
 
 fn verify_download_signature_with_key(
     public_key_b64: &str,
+    version: &str,
     download: &CliUpdateDownload,
 ) -> Result<()> {
     let public_key_b64 = public_key_b64.trim();
@@ -472,24 +477,11 @@ fn verify_download_signature_with_key(
     let signature = base64::engine::general_purpose::STANDARD
         .decode(signature)
         .context("invalid update signature")?;
-    let digest = sha256_digest_bytes(&download.sha256)?;
+    let message = update_signature_message(version, &download.target, &download.sha256);
 
     ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, &public_key)
-        .verify(&digest, &signature)
+        .verify(&message, &signature)
         .map_err(|_| anyhow::anyhow!("update signature verification failed"))
-}
-
-fn sha256_digest_bytes(hex: &str) -> Result<[u8; 32]> {
-    let hex = hex.trim();
-    if hex.len() != 64 {
-        bail!("invalid sha256 digest");
-    }
-    let mut digest = [0_u8; 32];
-    for (index, chunk) in hex.as_bytes().chunks(2).enumerate() {
-        let pair = std::str::from_utf8(chunk).context("invalid sha256 digest")?;
-        digest[index] = u8::from_str_radix(pair, 16).context("invalid sha256 digest")?;
-    }
-    Ok(digest)
 }
 
 /// Whether a manifest URL may drive self-replacement.
@@ -691,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_key_rejects_unsigned_or_tampered_downloads() {
+    fn a_pinned_key_signs_version_target_and_digest_together() {
         use ring::rand::SystemRandom;
         use ring::signature::{Ed25519KeyPair, KeyPair};
 
@@ -699,32 +691,66 @@ mod tests {
         let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
         let public =
             base64::engine::general_purpose::STANDARD.encode(key_pair.public_key().as_ref());
-        let digest = [0x11_u8; 32];
-        let signature = base64::engine::general_purpose::STANDARD
-            .encode(key_pair.sign(&digest).as_ref());
+        let version = "1.2.3";
+        let target = "aarch64-apple-darwin";
+        let sha256 = "11".repeat(32);
+        let signature = base64::engine::general_purpose::STANDARD.encode(
+            key_pair
+                .sign(&update_signature_message(version, target, &sha256))
+                .as_ref(),
+        );
 
         let mut download = CliUpdateDownload {
-            target: "aarch64-apple-darwin".into(),
+            target: target.into(),
             url: "https://example.com/relaycat".into(),
-            sha256: "11".repeat(32),
+            sha256: sha256.clone(),
             kind: "binary".into(),
             size_bytes: None,
             signature: Some(signature),
         };
-        assert!(verify_download_signature_with_key(&public, &download).is_ok());
+        assert!(verify_download_signature_with_key(&public, version, &download).is_ok());
 
-        // Same digest value, signature does not match it.
+        assert!(verify_download_signature_with_key(&public, "1.2.4", &download).is_err());
+
+        download.target = "x86_64-unknown-linux-gnu".into();
+        assert!(verify_download_signature_with_key(&public, version, &download).is_err());
+
+        download.target = target.into();
         download.sha256 = "22".repeat(32);
-        assert!(verify_download_signature_with_key(&public, &download).is_err());
+        assert!(verify_download_signature_with_key(&public, version, &download).is_err());
+
+        download.sha256 = sha256;
+        download.signature = Some(
+            base64::engine::general_purpose::STANDARD
+                .encode(key_pair.sign(&[0x11_u8; 32]).as_ref()),
+        );
+        assert!(verify_download_signature_with_key(&public, version, &download).is_err());
 
         // Missing signature is a hard failure once a key is pinned.
-        download.sha256 = "11".repeat(32);
         download.signature = None;
-        assert!(verify_download_signature_with_key(&public, &download).is_err());
+        assert!(verify_download_signature_with_key(&public, version, &download).is_err());
 
         // An unprovisioned key is a no-op; the official-host check still gates
         // self-replacement.
-        assert!(verify_download_signature_with_key("", &download).is_ok());
+        assert!(verify_download_signature_with_key("", version, &download).is_ok());
+    }
+
+    #[test]
+    fn openssl_ed25519_update_signature_interoperates() {
+        let download = CliUpdateDownload {
+            target: "x86_64-unknown-linux-gnu".into(),
+            url: "https://example.com/relaycat".into(),
+            sha256: "1111111111111111111111111111111111111111111111111111111111111111".into(),
+            kind: "binary".into(),
+            size_bytes: None,
+            signature: Some(
+                "3ja93460pJIIsdhkmp8Am+phFRwTQXLIDh+prrFGmHfBTUdkge3puou/giJSyy268M5XWZwuMZF2xy6pVC9kBA=="
+                    .into(),
+            ),
+        };
+        let public_key = "CwXkaMg8VEA0NDit1nnsiNwjzo6cPv0IhqBFryTEv5A=";
+
+        assert!(verify_download_signature_with_key(public_key, "1.2.3", &download).is_ok());
     }
 
     #[test]

@@ -46,9 +46,17 @@ impl fmt::Debug for StoredPairingSession {
 
 impl StoredPairingSession {
     pub fn new(material: PairingMaterial, cli_private_key: [u8; 32]) -> Self {
+        Self::new_at(material, cli_private_key, current_unix_timestamp())
+    }
+
+    pub(crate) fn new_at(
+        material: PairingMaterial,
+        cli_private_key: [u8; 32],
+        created_at_unix: u64,
+    ) -> Self {
         Self {
             version: 1,
-            created_at_unix: current_unix_timestamp(),
+            created_at_unix,
             relay_url: material.relay_url,
             room_id: material.room_id,
             session_kind: material.session_kind,
