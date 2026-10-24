@@ -1,7 +1,11 @@
 use relaycat_protocol::{AppJoinIntent, Direction, OuterFrame, RelayErrorCode, Role};
-use relaycat_relay::hub::{AdmissionCheck, CloseSignal, Hub, HubError, JoinRequest};
+use relaycat_relay::hub::{AdmissionCheck, CloseSignal, Hub, HubError, JoinRequest, QueuedFrame};
 use std::time::Duration;
 use tokio::sync::mpsc;
+
+fn received_frame(queued: Option<QueuedFrame>) -> Option<OuterFrame> {
+    queued.map(|queued| queued.frame)
+}
 
 #[tokio::test]
 async fn forwards_frame_from_cli_to_app_peer() {
@@ -42,13 +46,13 @@ async fn forwards_frame_from_cli_to_app_peer() {
     // The joining app now also receives a PeerJoined describing the CLI (so it
     // can learn the CLI's per-connection salt); drain it before the data frame.
     assert!(matches!(
-        app_rx.recv().await,
+        app_rx.recv().await.map(|queued| queued.frame),
         Some(OuterFrame::PeerJoined {
             role: Role::Cli,
             ..
         })
     ));
-    assert_eq!(app_rx.recv().await, Some(frame));
+    assert_eq!(received_frame(app_rx.recv().await), Some(frame));
 }
 
 #[tokio::test]
@@ -118,11 +122,11 @@ async fn forward_to_full_peer_channel_evicts_slow_peer_for_reconnect() {
     assert_eq!(stats.app_connected_total, 0);
     assert_eq!(stats.cli_idle, 1);
     assert_eq!(
-        cli_rx.recv().await,
+        received_frame(cli_rx.recv().await),
         Some(OuterFrame::PeerLeft { role: Role::App })
     );
     assert_eq!(
-        app_rx.recv().await,
+        received_frame(app_rx.recv().await),
         Some(OuterFrame::Data {
             room_id: "room-1".to_string(),
             direction: Direction::CliToApp,
@@ -131,7 +135,7 @@ async fn forward_to_full_peer_channel_evicts_slow_peer_for_reconnect() {
             ciphertext: vec![1, 2, 3],
         })
     );
-    assert_eq!(app_rx.recv().await, None);
+    assert_eq!(received_frame(app_rx.recv().await), None);
     hub.forward(
         "room-1",
         Role::App,
@@ -146,6 +150,54 @@ async fn forward_to_full_peer_channel_evicts_slow_peer_for_reconnect() {
     )
     .expect("evicted app transport is ignored after congestion");
     assert!(cli_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn global_queue_budget_evicts_and_releases_charge_when_receiver_drops() {
+    let hub = Hub::new(relaycat_relay::server::MAX_BINARY_FRAME_BYTES);
+    let (cli_tx, _cli_rx) = mpsc::channel(8);
+    let (app_tx, mut app_rx) = mpsc::channel(8);
+
+    hub.join(JoinRequest::new(
+        "room-budget",
+        Role::Cli,
+        1,
+        [1; 32],
+        None,
+        cli_tx,
+    ))
+    .expect("cli joins");
+    hub.join(JoinRequest::new(
+        "room-budget",
+        Role::App,
+        2,
+        [2; 32],
+        Some([9; 32]),
+        app_tx,
+    ))
+    .expect("app joins");
+    let _ = app_rx.recv().await;
+
+    let frame = |seq| OuterFrame::Data {
+        room_id: "room-budget".to_string(),
+        direction: Direction::CliToApp,
+        seq,
+        nonce: [seq as u8; 12],
+        ciphertext: vec![1; 600_000],
+    };
+    hub.forward("room-budget", Role::Cli, 1, frame(1))
+        .expect("first frame fits budget");
+    assert_eq!(hub.stats().queued_bytes, 600_000);
+
+    hub.forward("room-budget", Role::Cli, 1, frame(2))
+        .expect("budget eviction is not fatal");
+    let stats = hub.stats();
+    assert_eq!(stats.app_connected_total, 0);
+    assert_eq!(stats.global_queue_budget_evictions_total, 1);
+    assert_eq!(stats.queued_bytes, 600_000);
+
+    drop(app_rx);
+    assert_eq!(hub.stats().queued_bytes, 0);
 }
 
 #[tokio::test]
@@ -243,7 +295,7 @@ async fn app_replacement_sends_evicted_close_signal_even_with_full_queue() {
     assert_eq!(CloseSignal::Evicted.close_reason(), "evicted");
     // The queued frame is still the original PeerJoined; Evicted never fit.
     assert!(matches!(
-        old_app_rx.recv().await,
+        old_app_rx.recv().await.map(|queued| queued.frame),
         Some(OuterFrame::PeerJoined { .. })
     ));
 }
@@ -320,7 +372,7 @@ async fn forward_evicting_slow_cli_notifies_app() {
     assert_eq!(stats.app_without_cli, 1);
     // The surviving app must be told the CLI left so its SecureSession resets.
     assert_eq!(
-        app_rx.recv().await,
+        received_frame(app_rx.recv().await),
         Some(OuterFrame::PeerLeft { role: Role::Cli })
     );
 }
@@ -455,9 +507,11 @@ async fn cli_transport_leave_notifies_app_to_stop() {
     assert_eq!(hub.room_count(), 1);
     assert_eq!(hub.stats().app_without_cli, 1);
     assert_eq!(
-        tokio::time::timeout(std::time::Duration::from_millis(200), app_rx.recv())
+        received_frame(
+            tokio::time::timeout(std::time::Duration::from_millis(200), app_rx.recv())
             .await
             .expect("app should be notified when cli leaves"),
+        ),
         Some(OuterFrame::PeerLeft { role: Role::Cli })
     );
     assert!(cli_rx.recv().await.is_none());
@@ -505,11 +559,11 @@ async fn cli_rejoin_after_transport_leave_notifies_existing_app() {
     .expect("cli transport rejoins");
 
     assert_eq!(
-        app_rx.recv().await,
+        received_frame(app_rx.recv().await),
         Some(OuterFrame::PeerLeft { role: Role::Cli })
     );
     assert_eq!(
-        app_rx.recv().await,
+        received_frame(app_rx.recv().await),
         Some(OuterFrame::PeerJoined {
             role: Role::Cli,
             device_pubkey: [3; 32],
@@ -546,7 +600,7 @@ async fn joining_peer_notifies_existing_peer_with_public_key_and_pairing_proof()
     .expect("app joins");
 
     assert_eq!(
-        cli_rx.recv().await,
+        received_frame(cli_rx.recv().await),
         Some(OuterFrame::PeerJoined {
             role: Role::App,
             device_pubkey: [2; 32],
@@ -599,7 +653,7 @@ async fn cleanup_inactive_rooms_drops_expired_rooms() {
     assert_eq!(hub.cleanup_inactive_rooms(Duration::ZERO), 1);
     assert_eq!(hub.room_count(), 0);
     assert_eq!(
-        cli_rx.recv().await,
+        received_frame(cli_rx.recv().await),
         Some(OuterFrame::Error {
             message: "room expired".to_string(),
             code: Some(RelayErrorCode::RoomExpired),
@@ -653,7 +707,7 @@ async fn app_rejoin_evicts_old_app_and_sends_new_peer_joined_to_cli() {
     // CLI only receives PeerJoined for the new app; app-side disconnects are
     // intentionally invisible to CLI so it can remain idle.
     assert_eq!(
-        cli_rx.recv().await,
+        received_frame(cli_rx.recv().await),
         Some(OuterFrame::PeerJoined {
             role: Role::App,
             device_pubkey: [3; 32],
@@ -664,7 +718,7 @@ async fn app_rejoin_evicts_old_app_and_sends_new_peer_joined_to_cli() {
     );
 
     // Old app receives Evicted so it can surface "另一台设备已连接" and not auto-retry.
-    assert_eq!(app_old_rx.recv().await, Some(OuterFrame::Evicted));
+    assert_eq!(received_frame(app_old_rx.recv().await), Some(OuterFrame::Evicted));
 }
 
 #[tokio::test]
@@ -777,7 +831,7 @@ async fn app_resume_replaces_a_lingering_transport_from_the_same_device() {
         "same-device replacement must not enqueue an Evicted frame"
     );
     assert!(matches!(
-        cli_rx.recv().await,
+        cli_rx.recv().await.map(|queued| queued.frame),
         Some(OuterFrame::PeerJoined {
             role: Role::App,
             device_pubkey,
@@ -877,7 +931,7 @@ async fn mismatched_relay_admission_does_not_evict_existing_app() {
 
     hub.forward("room-1", Role::App, 2, OuterFrame::Ping)
         .expect("existing app remains active");
-    assert_eq!(cli_rx.recv().await, Some(OuterFrame::Ping));
+    assert_eq!(received_frame(cli_rx.recv().await), Some(OuterFrame::Ping));
 }
 
 #[tokio::test]
@@ -906,7 +960,7 @@ async fn legacy_room_without_relay_admission_still_allows_legacy_app() {
     .expect("legacy app remains allowed");
 
     assert_eq!(
-        cli_rx.recv().await,
+        received_frame(cli_rx.recv().await),
         Some(OuterFrame::PeerJoined {
             role: Role::App,
             device_pubkey: [2; 32],
@@ -958,7 +1012,7 @@ async fn cli_rejoin_evicts_old_cli_and_notifies_app() {
     .expect("new cli evicts old cli");
 
     assert_eq!(
-        app_rx.recv().await,
+        received_frame(app_rx.recv().await),
         Some(OuterFrame::PeerJoined {
             role: Role::Cli,
             device_pubkey: [3; 32],
@@ -969,7 +1023,7 @@ async fn cli_rejoin_evicts_old_cli_and_notifies_app() {
     );
     assert!(app_rx.try_recv().is_err());
     assert_eq!(
-        cli_old_rx.recv().await,
+        received_frame(cli_old_rx.recv().await),
         Some(OuterFrame::PeerLeft { role: Role::Cli })
     );
 }
@@ -1000,7 +1054,7 @@ async fn cleanup_inactive_rooms_notifies_connected_peers_before_removal() {
     .expect("app joins");
 
     assert_eq!(
-        cli_rx.recv().await,
+        received_frame(cli_rx.recv().await),
         Some(OuterFrame::PeerJoined {
             role: Role::App,
             device_pubkey: [2; 32],
@@ -1016,14 +1070,14 @@ async fn cleanup_inactive_rooms_notifies_connected_peers_before_removal() {
     assert_eq!(hub.cleanup_inactive_rooms(Duration::ZERO), 1);
     assert_eq!(hub.room_count(), 0);
     assert_eq!(
-        cli_rx.recv().await,
+        received_frame(cli_rx.recv().await),
         Some(OuterFrame::Error {
             message: "room expired".to_string(),
             code: Some(RelayErrorCode::RoomExpired),
         })
     );
     assert_eq!(
-        app_rx.recv().await,
+        received_frame(app_rx.recv().await),
         Some(OuterFrame::Error {
             message: "room expired".to_string(),
             code: Some(RelayErrorCode::RoomExpired),

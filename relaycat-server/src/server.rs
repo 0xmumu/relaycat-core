@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     config::RelayConfig,
-    hub::{AdmissionCheck, CloseSignal, Hub, HubError, HubStats, JoinRequest},
+    hub::{AdmissionCheck, CloseSignal, Hub, HubError, HubStats, JoinRequest, QueuedFrame},
     room::ConnId,
     xfyun::{RtasrUrlResponse, signed_rtasr_url},
 };
@@ -60,8 +60,10 @@ const WEBSOCKET_SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// the recipient is too slow; the hub evicts it so the ws task disconnects.
 // Keep the worst-case queued payload bounded (32 x 1 MiB frames per peer).
 pub const DEFAULT_OUTBOUND_CHANNEL_CAPACITY: usize = 32;
+/// Maximum aggregate queued frame payload across all connected peers.
+pub const DEFAULT_MAX_QUEUED_BYTES: usize = 256 * 1024 * 1024;
 /// Maximum number of simultaneous WebSocket connections across all rooms.
-pub const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 4096;
+pub const DEFAULT_MAX_CONCURRENT_CONNECTIONS: usize = 512;
 /// Maximum number of simultaneous WebSocket connections from one source IP.
 pub const DEFAULT_MAX_CONNECTIONS_PER_IP: usize = 24;
 /// How long to wait for the initial Join frame after the WebSocket is upgraded.
@@ -94,18 +96,7 @@ pub struct AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        Self {
-            hub: Arc::new(Hub::default()),
-            config: Arc::new(RelayConfig::default()),
-            next_conn_id: Arc::new(AtomicU64::new(1)),
-            rooms_expired_since_stats: Arc::new(AtomicU64::new(0)),
-            active_connections: Arc::new(AtomicUsize::new(0)),
-            active_connections_by_ip: Arc::new(Mutex::new(HashMap::new())),
-            rtasr_limiter: Arc::new(RtasrRateLimiter::new(
-                RTASR_GLOBAL_REQUESTS_PER_MINUTE,
-                RTASR_PER_ROOM_REQUESTS_PER_MINUTE,
-            )),
-        }
+        Self::with_config(RelayConfig::default())
     }
 }
 
@@ -143,8 +134,16 @@ enum ConnectionAdmissionError {
 impl AppState {
     pub fn with_config(config: RelayConfig) -> Self {
         Self {
+            hub: Arc::new(Hub::new(config.limits.max_queued_bytes)),
             config: Arc::new(config),
-            ..Self::default()
+            next_conn_id: Arc::new(AtomicU64::new(1)),
+            rooms_expired_since_stats: Arc::new(AtomicU64::new(0)),
+            active_connections: Arc::new(AtomicUsize::new(0)),
+            active_connections_by_ip: Arc::new(Mutex::new(HashMap::new())),
+            rtasr_limiter: Arc::new(RtasrRateLimiter::new(
+                RTASR_GLOBAL_REQUESTS_PER_MINUTE,
+                RTASR_PER_ROOM_REQUESTS_PER_MINUTE,
+            )),
         }
     }
 
@@ -555,8 +554,10 @@ mod tests {
             slow_consumer_evictions_total: 5,
             slow_consumer_evictions_cli: 1,
             slow_consumer_evictions_app: 4,
+            global_queue_budget_evictions_total: 0,
             slow_consumer_discarded_bytes: 2048,
             outbound_queue_high_water: 64,
+            queued_bytes: 0,
         };
         let process = ProcessStats {
             cpu_percent: 1.25,
@@ -1120,22 +1121,21 @@ async fn handle_socket(
     // treat this frame as the authoritative "admitted" signal instead of the
     // timing-based rejection probe. Sent directly on the socket before the
     // outbound queue is drained, so it precedes any PeerJoined notification.
-    if supports_join_accepted {
-        if let Ok(bytes) = encode_frame(&OuterFrame::JoinAccepted) {
-            if socket.send(Message::Binary(bytes.into())).await.is_err() {
-                state.hub.leave(&query.room_id, query.role, conn_id);
-                relaycat_log(
-                    "WARN",
-                    rejected_log(
-                        &query.room_id,
-                        query.role,
-                        conn_id,
-                        "failed to send join_accepted",
-                    ),
-                );
-                return;
-            }
-        }
+    if supports_join_accepted
+        && let Ok(bytes) = encode_frame(&OuterFrame::JoinAccepted)
+        && socket.send(Message::Binary(bytes.into())).await.is_err()
+    {
+        state.hub.leave(&query.room_id, query.role, conn_id);
+        relaycat_log(
+            "WARN",
+            rejected_log(
+                &query.room_id,
+                query.role,
+                conn_id,
+                "failed to send join_accepted",
+            ),
+        );
+        return;
     }
 
     relaycat_log("INFO", connected_log(&query.room_id, query.role, conn_id));
@@ -1160,7 +1160,7 @@ async fn relay_socket_frames(
     query: WsQuery,
     conn_id: ConnId,
     mut socket: WebSocket,
-    mut outbound_rx: mpsc::Receiver<OuterFrame>,
+    mut outbound_rx: mpsc::Receiver<QueuedFrame>,
     mut close_signal_rx: mpsc::Receiver<CloseSignal>,
 ) {
     let limits = state.config.limits.clone();
@@ -1212,7 +1212,7 @@ async fn relay_socket_frames(
                 }
             }
             outbound = outbound_rx.recv() => {
-                let Some(frame) = outbound else {
+                let Some(queued) = outbound else {
                     relaycat_log(
                         "WARN",
                         format!(
@@ -1224,7 +1224,7 @@ async fn relay_socket_frames(
                     );
                     break;
                 };
-                if send_frame(&mut socket, &frame).await.is_err() {
+                if send_frame(&mut socket, &queued.frame).await.is_err() {
                     relaycat_log(
                         "WARN",
                         format!(
@@ -1541,7 +1541,7 @@ fn encode_outbound_frame(frame: &OuterFrame) -> anyhow::Result<Vec<u8>> {
     if !binary_frame_within_limit(bytes.len(), MAX_BINARY_FRAME_BYTES) {
         relaycat_log(
             "WARN",
-            &format!(
+            format!(
                 "relay: refusing oversized outbound frame bytes={}",
                 bytes.len()
             ),

@@ -377,6 +377,8 @@ pub(crate) fn terminal_display_width_for_test(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
+const MAX_PENDING_SEQUENCE_BYTES: usize = 64 * 1024;
+
 #[derive(Debug)]
 pub(crate) struct LocalOutputFilter {
     pub(crate) pending: Vec<u8>,
@@ -457,7 +459,12 @@ impl LocalOutputFilter {
                     .iter()
                     .position(|byte| (0x40..=0x7e).contains(byte))
                 else {
-                    self.pending.extend_from_slice(remaining);
+                    if remaining.len() > MAX_PENDING_SEQUENCE_BYTES {
+                        result.local_output.extend_from_slice(remaining);
+                        result.remote_output.extend_from_slice(remaining);
+                    } else {
+                        self.pending.extend_from_slice(remaining);
+                    }
                     break;
                 };
                 let final_offset = body_final_offset + 2;
@@ -584,13 +591,23 @@ impl LocalOutputFilter {
                         continue;
                     }
                     LocalInputSequenceAction::Pending => {
-                        self.pending.extend_from_slice(remaining);
+                        if remaining.len() > MAX_PENDING_SEQUENCE_BYTES {
+                            result.local_output.extend_from_slice(remaining);
+                            result.remote_output.extend_from_slice(remaining);
+                        } else {
+                            self.pending.extend_from_slice(remaining);
+                        }
                         break;
                     }
                 }
             }
             if is_host_terminal_control_prefix(remaining) {
-                self.pending.extend_from_slice(remaining);
+                if remaining.len() > MAX_PENDING_SEQUENCE_BYTES {
+                    result.local_output.extend_from_slice(remaining);
+                    result.remote_output.extend_from_slice(remaining);
+                } else {
+                    self.pending.extend_from_slice(remaining);
+                }
                 break;
             }
             result.local_output.push(input[index]);
@@ -942,4 +959,22 @@ pub(crate) fn ascii_u16(bytes: &[u8]) -> Option<u16> {
         return None;
     }
     std::str::from_utf8(bytes).ok()?.parse().ok()
+}
+
+#[cfg(test)]
+mod pending_sequence_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_incomplete_sequence_is_emitted_instead_of_buffered() {
+        let mut filter = LocalOutputFilter::default();
+        let mut bytes = b"\x1b[".to_vec();
+        bytes.resize(bytes.len() + 100 * 1024, b'1');
+
+        let result = filter.filter(&bytes);
+
+        assert!(filter.pending.len() <= MAX_PENDING_SEQUENCE_BYTES);
+        assert_eq!(result.local_output, bytes);
+        assert_eq!(result.remote_output, bytes);
+    }
 }

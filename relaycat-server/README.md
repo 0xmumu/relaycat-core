@@ -39,15 +39,16 @@ target/release/relaycat-relay \
 
 ```yaml
 limits:
-  max_concurrent_connections: 4096
+  max_concurrent_connections: 512
   max_connections_per_ip: 24
   inbound_messages_per_second: 120
   inbound_bytes_per_second: 2097152
   outbound_channel_capacity: 64
   max_binary_frame_bytes: 1048576
+  max_queued_bytes: 268435456
 ```
 
-这些限制分别控制全局连接、单来源 IP 连接、每连接每秒消息数、每连接每秒字节数、出站队列容量和单个二进制帧大小。生产环境应根据实例内存、文件描述符上限、网络带宽和客户端规模调整，并在反向代理层增加连接和请求保护。
+这些限制分别控制全局连接、单来源 IP 连接、每连接每秒消息数、每连接每秒字节数、出站队列容量、单个二进制帧大小和所有连接共享的排队 payload 字节上限（默认 256 MiB，至少按单帧上限生效）。生产环境应根据实例内存、文件描述符上限、网络带宽和客户端规模调整，并在反向代理层增加连接和请求保护。
 
 ## 客户端连接
 

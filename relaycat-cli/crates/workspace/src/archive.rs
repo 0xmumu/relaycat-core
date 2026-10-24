@@ -78,7 +78,8 @@ fn zip_entries(path: &Path) -> Result<(Vec<ArchiveEntry>, bool), WorkspaceServic
             break;
         }
         let file = archive.by_index_raw(index).map_err(|_| invalid_archive())?;
-        let Some(path) = safe_entry_path(file.name()) else { continue };
+        let name = file.name().map_err(|_| invalid_archive())?;
+        let Some(path) = safe_entry_path(&name) else { continue };
         if entries.len() == WORKSPACE_ARCHIVE_ENTRY_LIMIT { has_more = true; break; }
         entries.push(ArchiveEntry {
             path,

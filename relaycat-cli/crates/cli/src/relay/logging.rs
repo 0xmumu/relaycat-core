@@ -60,7 +60,7 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
     let file = options.open(path)?;
     #[cfg(unix)]
@@ -268,7 +268,7 @@ pub(crate) fn format_byte_preview(bytes: &[u8]) -> String {
 pub(crate) fn local_timestamp() -> String {
     #[cfg(not(unix))]
     {
-        return current_unix_timestamp().to_string();
+        current_unix_timestamp().to_string()
     }
 
     #[cfg(unix)]
@@ -328,6 +328,27 @@ mod tests {
                 0o600
             );
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn log_files_refuse_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join(format!(
+            "relaycat-log-symlink-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target");
+        let path = dir.join("cli.log");
+        fs::write(&target, "untouched").unwrap();
+        symlink(&target, &path).unwrap();
+
+        assert!(open_log_file(&path).is_err());
+        assert_eq!(fs::read_to_string(target).unwrap(), "untouched");
         let _ = fs::remove_dir_all(&dir);
     }
 }

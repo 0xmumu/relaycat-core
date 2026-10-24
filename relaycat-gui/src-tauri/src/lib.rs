@@ -1032,6 +1032,11 @@ fn read_log_tail(path: String, max_bytes: u64) -> Result<String, String> {
     let candidate = PathBuf::from(&path);
     if candidate.file_name().and_then(|n| n.to_str()) != Some("cli.log")
         || candidate.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) != Some(relaycat_cli::pairing_store::RELAYCAT_DIR) { return Err("invalid log path".into()); }
+    if std::fs::symlink_metadata(&candidate)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+    {
+        return Err("invalid log path".into());
+    }
     let parent = candidate.parent().ok_or("invalid log path")?.canonicalize().map_err(|e| e.to_string())?;
     if parent.file_name().and_then(|n| n.to_str()) != Some(relaycat_cli::pairing_store::RELAYCAT_DIR) { return Err("invalid log path".into()); }
     read_file_tail(&path, max_bytes)
